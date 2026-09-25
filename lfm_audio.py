@@ -45,9 +45,13 @@ def trim_pauses(chunks, max_silent=3, floor=0.003):
     """Drop leading silent chunks and cap pauses at max_silent chunks (80ms each).
 
     The model pads replies with ~0.5-1s of silence (chunk rms <= 0.002; speech is 0.02-0.06).
+    Text pieces (str) mixed into the stream pass straight through.
     """
     started, run = False, 0
     for c in chunks:
+        if isinstance(c, str):
+            yield c
+            continue
         if np.sqrt(np.mean(c ** 2)) < floor:
             run += 1
             if not started or run > max_silent:
@@ -147,19 +151,13 @@ def voice(debug=False, show_text=True, transcript=True):
     import sounddevice as sd
     from silero_vad import load_silero_vad
 
-    processor, model = load()
+    from voice_agent import VoiceAgent  # imports this module, so import it lazily
+
+    agent = VoiceAgent()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)  # torch.jit.load deprecation inside silero
         vad = load_silero_vad()
-    mimi = processor.mimi.eval()  # streaming decoder: one 8-code frame -> 80ms of 24kHz audio
-    with mimi.streaming(1):  # warm up, the first decode takes ~2.4s on mps
-        for _ in range(5):
-            mimi.decode(torch.randint(2048, (1, 8, 1), device=DEVICE))
     speaker = Speaker(sd)
-    chat = ChatState(processor)
-    chat.new_turn("system")
-    chat.add_text("Respond with interleaved text and audio.")
-    chat.end_turn()
     print("ready; Ctrl+C to quit")
     if debug:
         os.makedirs("voice_debug", exist_ok=True)
@@ -175,51 +173,26 @@ def voice(debug=False, show_text=True, transcript=True):
         if debug:
             sf.write(f"voice_debug/turn{turn}_heard.wav", speech, MIC_SR)
             print(f"  [debug] mic peak {np.abs(speech).max():.3f} rms {np.sqrt(np.mean(speech ** 2)):.4f}")
-        wav = torch.from_numpy(speech).unsqueeze(0)
-
-        chat.new_turn("user")
-        chat.add_audio(wav, MIC_SR)
-        chat.end_turn()
-        chat.new_turn("assistant")
-
-        # text tokens are the model's script for the speech; kept for history, shown with --show-text
-        text, audio, modality, played = [], [], [], []
-        marks = {}  # event -> perf_counter(), first occurrence only
-
-        def mark(event):
-            marks.setdefault(event, time.perf_counter())
-
-        def reply_chunks():
-            with mimi.streaming(1):
-                for t in model.generate_interleaved(**chat, max_new_tokens=512, audio_temperature=1.0, audio_top_k=4):
-                    if t.numel() == 1:
-                        mark("first text token")
-                        if show_text:
-                            prefix = "" if text else "agent: "
-                            print(prefix + processor.text.decode(t, skip_special_tokens=True), end="", flush=True)
-                        text.append(t)
-                        modality.append(LFMModality.TEXT)
-                    else:
-                        mark("first audio frame")
-                        audio.append(t)
-                        modality.append(LFMModality.AUDIO_OUT)
-                        if not (t == 2048).any():  # 2048 marks end of audio
-                            yield mimi.decode(t[None, :, None])[0].float().cpu().numpy().ravel()
-            mark("generation done")
-
+        played, marks, printed = [], {}, False  # marks: event -> perf_counter(), first occurrence only
         speaker.first_played = None
-        for chunk in trim_pauses(reply_chunks()):
-            mark("first bytes to speaker")  # first non-silent chunk, after trim_pauses
-            speaker.q.put(chunk)
-            played.append(chunk)
-        if show_text and text:
+        for item in agent.reply(audio=speech):
+            if isinstance(item, str):
+                if show_text:
+                    print(("" if printed else "agent: ") + item, end="", flush=True)
+                    printed = True
+            else:
+                marks.setdefault("first bytes to speaker", time.perf_counter())  # first non-silent chunk
+                speaker.q.put(item)
+                played.append(item)
+        marks.update(agent.marks)
+        if printed:
             print(flush=True)
         if transcript:  # generation is done; the reply keeps playing from the speaker's queue meanwhile
-            said = transcribe(processor, model, wav, MIC_SR)
-            mark("transcript ready")
+            said = transcribe(agent.processor, agent.model, torch.from_numpy(speech).unsqueeze(0), MIC_SR)
+            marks["transcript ready"] = time.perf_counter()
             print(f'you said: "{said}"', flush=True)
         speaker.drain()
-        mark("playback done")
+        marks["playback done"] = time.perf_counter()
         if speaker.first_played:
             marks["first sound played"] = speaker.first_played
         secs = sum(map(len, played)) / 24_000
@@ -227,18 +200,10 @@ def voice(debug=False, show_text=True, transcript=True):
               + " | ".join(f"{k} {v - t0:.2f}s" for k, v in sorted(marks.items(), key=lambda kv: kv[1]))
               + f" | reply {secs:.1f}s of audio", flush=True)
 
-        # keep the reply in history so the next turn has context (same as liquid_audio's demo)
-        if modality:
-            empty = torch.empty((8, 0), dtype=torch.long, device=processor.device)
-            chat.append(text=torch.stack(text, 1) if text else empty[:1],
-                        audio_out=torch.stack(audio, 1) if audio else empty,
-                        modality_flag=torch.tensor(modality))
-        chat.end_turn()
-
         if debug:
-            print(f"  [debug] reply text: {processor.text.decode(torch.cat(text)) if text else ''!r}")
+            print(f"  [debug] reply text: {agent.last_text!r}")
         if not played:
-            print(f"(model returned no audio; text: {processor.text.decode(torch.cat(text)) if text else ''!r})")
+            print(f"(model returned no audio; text: {agent.last_text!r})")
         elif debug:
             sf.write(f"voice_debug/turn{turn}_reply.wav", np.concatenate(played), 24_000)
 

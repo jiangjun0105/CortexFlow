@@ -19,6 +19,8 @@ x = chunks(np.concatenate([silence(0.72, sr), tone(0.8, sr, 0.05), silence(0.64,
 y = list(trim_pauses(x))
 assert len(y) == 10 + 3 + 10, len(y)
 assert np.abs(y[0]).max() > 0.01  # starts with speech
+mixed = list(trim_pauses(["The", x[0], " cat", x[12]]))  # silent chunk dropped, text kept in order
+assert [m for m in mixed if isinstance(m, str)] == ["The", " cat"] and len(mixed) == 3
 
 # VAD state machine (fake prob = "is there signal"): ignores a short click, captures the
 # utterance with preroll, ends after 0.5s of silence, caps at max_s
