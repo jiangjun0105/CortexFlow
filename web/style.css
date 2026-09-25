@@ -27,6 +27,18 @@ body[data-state=speaking] .orb { opacity:1; animation:none; transition:transform
 @keyframes breathe { 50% { transform:scale(1.05); } }
 @keyframes swirl { to { transform:rotate(360deg); } }
 
+/* video avatar (falls back to .orb above if the video fails) */
+.avatar-wrap { width:78%; max-width:560px; aspect-ratio:1280/704; flex:none; border-radius:28px; overflow:hidden;
+  box-shadow:0 0 50px 6px rgba(242,179,61,.18); outline:3px solid transparent; outline-offset:4px;
+  transition:box-shadow .4s, outline-color .4s, filter .4s, transform 60ms linear; filter:brightness(.8); }
+.avatar { display:block; width:100%; height:100%; object-fit:cover; }
+body[data-state=listening] .avatar-wrap, body[data-state=hearing] .avatar-wrap {
+  filter:none; outline-color:var(--accent); box-shadow:0 0 70px 12px rgba(242,179,61,.35); }
+body[data-state=thinking] .avatar-wrap { filter:brightness(.92); animation:ring 1.4s ease-in-out infinite; }
+body[data-state=speaking] .avatar-wrap { filter:none; transform:scale(calc(1 + var(--level) * .04));
+  box-shadow:0 0 calc(50px + var(--level) * 60px) calc(6px + var(--level) * 16px) rgba(242,179,61,calc(.25 + var(--level) * .45)); }
+@keyframes ring { 50% { outline-color:var(--accent-2); box-shadow:0 0 80px 16px rgba(232,121,58,.4); } }
+
 /* existing controls */
 .ui #caption { min-height:3em; max-width:32rem; font-size:1.4rem; color:var(--ink); }
 .ui #talk { font:inherit; font-weight:600; padding:1.1rem 2.6rem; border-radius:999px; border:0; cursor:pointer;
@@ -49,6 +61,7 @@ body.no-metrics .ui-metrics, body.no-metrics .ui #metrics { display:none; }
   .ui { grid-template-columns:minmax(0,1fr); grid-template-rows:auto 1fr; height:auto; min-height:100vh; overflow:visible; }
   .ui-left { flex-direction:row; flex-wrap:wrap; padding:.8rem 1rem; gap:.8rem; }
   .orb { width:56px; }
+  .avatar-wrap { width:120px; border-radius:14px; }
   .ui #caption { min-height:0; font-size:1rem; flex:1 1 12rem; text-align:left; }
   .ui #talk { padding:.7rem 1.6rem; }
   .ui-metrics { max-width:none; }

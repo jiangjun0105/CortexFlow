@@ -28,7 +28,7 @@ from lfm_audio import BLOCK, MIC_SR, Endpointer
 MAX_FRAME_S = 1  # one mic frame; the browser sends ~0.1 s
 # True: drop the mic while the agent thinks/speaks (no barge-in). Flip it if the agent's own voice
 # leaks past the browser's echo cancellation and it keeps interrupting itself.
-HALF_DUPLEX = False
+HALF_DUPLEX = True  # the browser echo cancellation let the agent hear itself and barge in on its own replies
 AGENT = None  # VoiceAgent, loaded at startup; tests set a fake before starting the app
 VAD = None  # block (float32, 512 samples) -> speech prob; silero at startup, tests set a fake
 ASR = None  # pcm -> text (mlx-whisper), loaded with the real agent; None: every turn is plain chat

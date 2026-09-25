@@ -23,14 +23,6 @@ const out = new AudioContext({ sampleRate: 24000 });
 const player = out.audioWorklet.addModule("worklets/player.js").then(() => {
   const node = new AudioWorkletNode(out, "pcm-player", { processorOptions: { prebuffer: PREBUFFER_S * 24000 } });
   node.connect(out.destination);
-  // orb pulses with the agent's voice: RMS of what's playing, ~0..1
-  const meter = out.createAnalyser(), buf = new Float32Array(meter.fftSize);
-  node.connect(meter);
-  (function tick() {
-    meter.getFloatTimeDomainData(buf);
-    UI.level(Math.min(1, 4 * Math.sqrt(buf.reduce((s, x) => s + x * x, 0) / buf.length)));
-    requestAnimationFrame(tick);
-  })();
   node.port.onmessage = ({ data }) => {
     if (data.type === "started") {
       firstSoundMs = Math.round(performance.now() - speechEndedAt + (out.outputLatency || 0) * 1000);
