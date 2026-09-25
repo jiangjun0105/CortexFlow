@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>views dev harness</title>
+  <style>
+    :root { --bg: #17130f; --panel: #221c16; --ink: #f6eee4; --muted: #a8998a;
+            --accent: #f2b33d; --accent-2: #e8793a; --radius: 20px;
+            --font: "Inter", system-ui, sans-serif; --step-size: 34px; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); }
+    #bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; background: #000; }
+    #bar button { font: inherit; padding: 6px 12px; cursor: pointer; }
+    #stage { height: calc(100vh - 160px); }
+    #log { height: 100px; overflow-y: auto; margin: 0; padding: 6px 8px; font: 12px/1.4 monospace; background: #000; color: #9f9; }
+  </style>
+  <link rel="stylesheet" href="views.css">
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="views.js"></script>
+</head>
+<body>
+  <div id="bar"></div>
+  <section id="stage"></section>
+  <pre id="log"></pre>
+  <script>
+    const log = (s) => { const L = document.getElementById("log"); L.textContent += s + "\n"; L.scrollTop = 1e9; };
+    Views.mount(document.getElementById("stage"));
+    Views.onAction = (a) => log("onAction " + JSON.stringify(a));
+    window.onerror = (m) => log("ERROR " + m);
+    fetch("../fixtures/demo.json").then((r) => r.json()).then((d) => {
+      let step = 0;
+      const btns = {
+        welcome: () => Views.show({ type: "view", view: "welcome" }),
+        dishes: () => Views.show({ type: "view", view: "dishes", meals: d.meals }),
+        video: () => Views.show({ type: "view", ...d.video }),
+        steps: () => Views.show({ type: "view", ...d.steps }),
+        "next step": () => Views.control({ type: "control", name: "goto_step", index: ++step % d.steps.steps.length }),
+        "seek 60": () => Views.control({ type: "control", name: "video", cmd: "seek", t: 60 }),
+        pause: () => Views.control({ type: "control", name: "video", cmd: "pause" }),
+        play: () => Views.control({ type: "control", name: "video", cmd: "play" }),
+        "bad video": () => Views.show({ type: "view", view: "video", dish: "Broken", main: { id: "xxxxxxxxxxx", title: "bad", thumb: d.video.main.thumb }, alternates: [] }),
+      };
+      for (const [k, f] of Object.entries(btns)) {
+        const b = document.createElement("button"); b.textContent = k;
+        b.onclick = () => { log("> " + k); f(); }; document.getElementById("bar").append(b);
+      }
+    });
+  </script>
+</body>
+</html>
