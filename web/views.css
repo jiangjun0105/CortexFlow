@@ -1,0 +1,109 @@
+/* Stage views. Tokens come from style.css :root; fallbacks here in case they're missing. */
+.vw-stage {
+  position: relative; overflow: hidden; min-height: 520px; height: 100%;
+  background: var(--bg, #17130f); color: var(--ink, #f6eee4);
+  font-family: var(--font, "Inter", system-ui, sans-serif);
+}
+.vw-pane {
+  position: absolute; inset: 0; overflow-y: auto; box-sizing: border-box;
+  padding: clamp(16px, 3vw, 40px);
+  display: flex; flex-direction: column; gap: 18px;
+  opacity: 0; visibility: hidden; transform: translateX(40px);
+  transition: opacity .35s ease, transform .45s ease, visibility 0s .45s;
+}
+.vw-pane.active { opacity: 1; visibility: visible; transform: none; transition: opacity .35s ease, transform .45s ease; }
+.vw-pane.left { transform: translateX(-60px) scale(.85); }   /* video shrinks away when steps come in */
+
+.vw-title { margin: 0; font-size: 26px; font-weight: 700; }
+.vw-sub, .vw-hint { color: var(--muted, #a8998a); font-size: 14px; margin: 0; }
+
+.vw-stage button { font: inherit; color: inherit; }
+.vw-chip {
+  border: 1px solid rgba(255,255,255,.14); background: var(--panel, #221c16);
+  padding: 10px 18px; border-radius: 999px; cursor: pointer; transition: background .2s, border-color .2s;
+}
+.vw-chip:hover { border-color: var(--accent, #f2b33d); }
+
+/* welcome */
+.vw-welcome { justify-content: center; align-items: center; text-align: center; }
+.vw-greet { font-size: clamp(28px, 4vw, 44px); margin: 0; }
+.vw-chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.vw-welcome .vw-chip { color: var(--muted, #a8998a); }
+
+/* dishes */
+.vw-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.vw-card {
+  text-align: left; padding: 0; border: 2px solid transparent; cursor: pointer; overflow: hidden;
+  background: var(--panel, #221c16); border-radius: var(--radius, 20px);
+  animation: vw-in .45s ease both;
+  transition: transform .3s ease, opacity .3s ease, border-color .3s ease;
+}
+.vw-card:hover { transform: translateY(-3px); }
+.vw-card.selected { border-color: var(--accent, #f2b33d); transform: scale(1.04); }
+.vw-card.faded { opacity: .35; }
+.vw-img {
+  aspect-ratio: 4 / 3; overflow: hidden;
+  background: linear-gradient(135deg, var(--accent, #f2b33d), var(--accent-2, #e8793a));
+}
+.vw-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vw-card-body { padding: 14px 16px 18px; }
+.vw-card-name { margin: 0 0 6px; font-size: 20px; }
+.vw-card-meta { color: var(--accent, #f2b33d); font-size: 13px; margin-bottom: 6px; }
+.vw-card-desc {
+  margin: 0; color: var(--muted, #a8998a); font-size: 14px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+@keyframes vw-in { from { opacity: 0; transform: translateY(24px); } }
+
+/* video */
+.vw-player {
+  position: relative; aspect-ratio: 16 / 9; width: 100%; background: #000;
+  border-radius: var(--radius, 20px); overflow: hidden;
+}
+.vw-player iframe, .vw-player > div { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.vw-fallback { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink, #f6eee4); text-decoration: none; }
+.vw-fallback img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .5; }
+.vw-fallback span { position: relative; background: var(--accent, #f2b33d); color: #17130f; padding: 10px 20px; border-radius: 999px; font-weight: 600; }
+.vw-alts { display: flex; flex-direction: column; gap: 8px; }
+.vw-alt {
+  display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer;
+  background: var(--panel, #221c16); border: 0; border-radius: 12px; padding: 8px;
+}
+.vw-alt img { width: 96px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; }
+.vw-alt:hover { outline: 1px solid var(--accent, #f2b33d); }
+
+/* steps */
+.vw-steps-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.vw-progress { display: flex; align-items: center; gap: 12px; color: var(--muted, #a8998a); font-size: 14px; }
+.vw-dots { display: flex; gap: 6px; }
+.vw-dots i { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.18); transition: background .3s; }
+.vw-dots i.done { background: var(--accent-2, #e8793a); }
+.vw-dots i.on { background: var(--accent, #f2b33d); }
+.vw-step {
+  flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 16px;
+  background: var(--panel, #221c16); border-radius: var(--radius, 20px); padding: clamp(20px, 4vw, 48px);
+}
+.vw-step.deal, .vw-step.from-right { animation: vw-from-right .4s ease both; }
+.vw-step.from-left { animation: vw-from-left .4s ease both; }
+@keyframes vw-from-right { from { opacity: 0; transform: translateX(60px) rotate(2deg); } }
+@keyframes vw-from-left { from { opacity: 0; transform: translateX(-60px) rotate(-2deg); } }
+.vw-step-icon { font-size: 56px; line-height: 1; }
+.vw-step-title { margin: 0; font-size: max(34px, var(--step-size, 34px)); line-height: 1.15; }
+.vw-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.vw-tag { background: rgba(242,179,61,.15); color: var(--accent, #f2b33d); padding: 5px 12px; border-radius: 999px; font-size: 14px; }
+.vw-step-detail { margin: 0; font-size: 20px; line-height: 1.5; color: var(--ink, #f6eee4); opacity: .85; }
+.vw-nav { display: flex; justify-content: space-between; gap: 12px; }
+.vw-arrow {
+  background: none; border: 0; cursor: pointer; color: var(--muted, #a8998a); font-size: 15px; padding: 8px 4px;
+  max-width: 48%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.vw-arrow:hover:not(:disabled) { color: var(--ink, #f6eee4); }
+.vw-arrow:disabled { opacity: .3; cursor: default; }
+.vw-back { align-self: flex-end; }
+
+@media (max-width: 700px) {
+  .vw-cards { grid-template-columns: 1fr; }
+  .vw-card { display: grid; grid-template-columns: 120px 1fr; }
+  .vw-img { align-self: start; }
+  .vw-step-icon { font-size: 44px; }
+}

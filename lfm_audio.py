@@ -45,9 +45,13 @@ def trim_pauses(chunks, max_silent=3, floor=0.003):
     """Drop leading silent chunks and cap pauses at max_silent chunks (80ms each).
 
     The model pads replies with ~0.5-1s of silence (chunk rms <= 0.002; speech is 0.02-0.06).
+    Text pieces (str) mixed into the stream pass straight through.
     """
     started, run = False, 0
     for c in chunks:
+        if isinstance(c, str):
+            yield c
+            continue
         if np.sqrt(np.mean(c ** 2)) < floor:
             run += 1
             if not started or run > max_silent:
@@ -86,28 +90,53 @@ class Speaker:
         time.sleep(self.stream.latency)
 
 
-def utterance(blocks, speech_prob, start=0.5, stop=0.3, min_speech_s=0.12, end_silence_s=0.5,
-              preroll_s=0.32, max_s=10.0):
-    """First utterance in a stream of mic blocks, or None if the stream ends.
+class Endpointer:
+    """Push-based VAD state machine: feed() one 512-sample block and its speech prob at a time.
 
     Same state machine and defaults as sb_convai's VADDetector: begins after min_speech_s with
     prob >= start (keeping preroll_s before it), ends after end_silence_s with prob < stop, or at max_s.
     """
-    pre = deque(maxlen=round((preroll_s + min_speech_s) / BLOCK_S))
-    speech, loud, quiet = None, 0, 0
+
+    def __init__(self, start=0.5, stop=0.3, min_speech_s=0.12, end_silence_s=0.5, preroll_s=0.32, max_s=10.0):
+        self.start, self.stop, self.min_speech_s = start, stop, min_speech_s
+        self.end_silence_s, self.max_s = end_silence_s, max_s
+        self.pre = deque(maxlen=round((preroll_s + min_speech_s) / BLOCK_S))
+        self.reset()
+
+    def reset(self):
+        self.pre.clear()
+        self.speech, self.loud, self.quiet = None, 0, 0
+
+    @property
+    def speaking(self):
+        return self.speech is not None
+
+    def feed(self, block, prob):
+        """Returns the whole utterance (float32 16kHz) on the block that ends it, else None."""
+        if self.speech is None:
+            self.pre.append(block)
+            self.loud = self.loud + 1 if prob >= self.start else 0
+            if self.loud * BLOCK_S >= self.min_speech_s:
+                self.speech = list(self.pre)
+            return None
+        self.speech.append(block)
+        self.quiet = 0 if prob >= self.stop else self.quiet + 1
+        if self.quiet * BLOCK_S >= self.end_silence_s or len(self.speech) * BLOCK_S >= self.max_s:
+            speech = np.concatenate(self.speech)
+            self.reset()
+            return speech
+        return None
+
+
+def utterance(blocks, speech_prob, **endpointer_kw):
+    """First utterance in a stream of mic blocks, or None if the stream ends (pull-style Endpointer)."""
+    ep = Endpointer(**endpointer_kw)
     for b in blocks:
-        p = speech_prob(b)
-        if speech is None:
-            pre.append(b)
-            loud = loud + 1 if p >= start else 0
-            if loud * BLOCK_S >= min_speech_s:
-                speech = list(pre)
-                print("(hearing you...)", flush=True)
-        else:
-            speech.append(b)
-            quiet = 0 if p >= stop else quiet + 1
-            if quiet * BLOCK_S >= end_silence_s or len(speech) * BLOCK_S >= max_s:
-                return np.concatenate(speech)
+        was_speaking = ep.speaking
+        if (speech := ep.feed(b, speech_prob(b))) is not None:
+            return speech
+        if ep.speaking and not was_speaking:
+            print("(hearing you...)", flush=True)
     return None
 
 
@@ -147,19 +176,13 @@ def voice(debug=False, show_text=True, transcript=True):
     import sounddevice as sd
     from silero_vad import load_silero_vad
 
-    processor, model = load()
+    from voice_agent import VoiceAgent  # imports this module, so import it lazily
+
+    agent = VoiceAgent()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)  # torch.jit.load deprecation inside silero
         vad = load_silero_vad()
-    mimi = processor.mimi.eval()  # streaming decoder: one 8-code frame -> 80ms of 24kHz audio
-    with mimi.streaming(1):  # warm up, the first decode takes ~2.4s on mps
-        for _ in range(5):
-            mimi.decode(torch.randint(2048, (1, 8, 1), device=DEVICE))
     speaker = Speaker(sd)
-    chat = ChatState(processor)
-    chat.new_turn("system")
-    chat.add_text("Respond with interleaved text and audio.")
-    chat.end_turn()
     print("ready; Ctrl+C to quit")
     if debug:
         os.makedirs("voice_debug", exist_ok=True)
@@ -175,51 +198,26 @@ def voice(debug=False, show_text=True, transcript=True):
         if debug:
             sf.write(f"voice_debug/turn{turn}_heard.wav", speech, MIC_SR)
             print(f"  [debug] mic peak {np.abs(speech).max():.3f} rms {np.sqrt(np.mean(speech ** 2)):.4f}")
-        wav = torch.from_numpy(speech).unsqueeze(0)
-
-        chat.new_turn("user")
-        chat.add_audio(wav, MIC_SR)
-        chat.end_turn()
-        chat.new_turn("assistant")
-
-        # text tokens are the model's script for the speech; kept for history, shown with --show-text
-        text, audio, modality, played = [], [], [], []
-        marks = {}  # event -> perf_counter(), first occurrence only
-
-        def mark(event):
-            marks.setdefault(event, time.perf_counter())
-
-        def reply_chunks():
-            with mimi.streaming(1):
-                for t in model.generate_interleaved(**chat, max_new_tokens=512, audio_temperature=1.0, audio_top_k=4):
-                    if t.numel() == 1:
-                        mark("first text token")
-                        if show_text:
-                            prefix = "" if text else "agent: "
-                            print(prefix + processor.text.decode(t, skip_special_tokens=True), end="", flush=True)
-                        text.append(t)
-                        modality.append(LFMModality.TEXT)
-                    else:
-                        mark("first audio frame")
-                        audio.append(t)
-                        modality.append(LFMModality.AUDIO_OUT)
-                        if not (t == 2048).any():  # 2048 marks end of audio
-                            yield mimi.decode(t[None, :, None])[0].float().cpu().numpy().ravel()
-            mark("generation done")
-
+        played, marks, printed = [], {}, False  # marks: event -> perf_counter(), first occurrence only
         speaker.first_played = None
-        for chunk in trim_pauses(reply_chunks()):
-            mark("first bytes to speaker")  # first non-silent chunk, after trim_pauses
-            speaker.q.put(chunk)
-            played.append(chunk)
-        if show_text and text:
+        for item in agent.reply(audio=speech):
+            if isinstance(item, str):
+                if show_text:
+                    print(("" if printed else "agent: ") + item, end="", flush=True)
+                    printed = True
+            else:
+                marks.setdefault("first bytes to speaker", time.perf_counter())  # first non-silent chunk
+                speaker.q.put(item)
+                played.append(item)
+        marks.update(agent.marks)
+        if printed:
             print(flush=True)
         if transcript:  # generation is done; the reply keeps playing from the speaker's queue meanwhile
-            said = transcribe(processor, model, wav, MIC_SR)
-            mark("transcript ready")
+            said = transcribe(agent.processor, agent.model, torch.from_numpy(speech).unsqueeze(0), MIC_SR)
+            marks["transcript ready"] = time.perf_counter()
             print(f'you said: "{said}"', flush=True)
         speaker.drain()
-        mark("playback done")
+        marks["playback done"] = time.perf_counter()
         if speaker.first_played:
             marks["first sound played"] = speaker.first_played
         secs = sum(map(len, played)) / 24_000
@@ -227,18 +225,10 @@ def voice(debug=False, show_text=True, transcript=True):
               + " | ".join(f"{k} {v - t0:.2f}s" for k, v in sorted(marks.items(), key=lambda kv: kv[1]))
               + f" | reply {secs:.1f}s of audio", flush=True)
 
-        # keep the reply in history so the next turn has context (same as liquid_audio's demo)
-        if modality:
-            empty = torch.empty((8, 0), dtype=torch.long, device=processor.device)
-            chat.append(text=torch.stack(text, 1) if text else empty[:1],
-                        audio_out=torch.stack(audio, 1) if audio else empty,
-                        modality_flag=torch.tensor(modality))
-        chat.end_turn()
-
         if debug:
-            print(f"  [debug] reply text: {processor.text.decode(torch.cat(text)) if text else ''!r}")
+            print(f"  [debug] reply text: {agent.last_text!r}")
         if not played:
-            print(f"(model returned no audio; text: {processor.text.decode(torch.cat(text)) if text else ''!r})")
+            print(f"(model returned no audio; text: {agent.last_text!r})")
         elif debug:
             sf.write(f"voice_debug/turn{turn}_reply.wav", np.concatenate(played), 24_000)
 
