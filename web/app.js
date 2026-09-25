@@ -49,7 +49,6 @@ function connect() {
   ws.onmessage = (e) => {
     if (e.data instanceof ArrayBuffer) return toPlayer({ type: "buffer", buffer: e.data }, [e.data]);
     const msg = JSON.parse(e.data);
-    UI.handle(msg); // orb state, stage views, metrics strip
     if (msg.type === "state") {
       if (msg.value === "thinking") { // the VAD decided you finished: a new reply starts
         speechEndedAt = performance.now();
@@ -93,7 +92,6 @@ async function toggle() {
     mic.node.port.postMessage({ type: "stop" });
     talk.textContent = "Start";
     talk.classList.remove("on");
-    UI.handle({ type: "state", value: "idle" });
     return setStatus("");
   }
   out.resume();
@@ -110,5 +108,4 @@ async function toggle() {
 }
 
 talk.addEventListener("click", toggle);
-UI.onAction = (a) => ws.readyState === 1 && ws.send(JSON.stringify(a)); // clicks on cards/steps/chips
 connect();
