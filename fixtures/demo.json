@@ -1,30 +1,120 @@
 {
   "meals": [
-    {"id": "shakshuka", "name": "Shakshuka", "image": null, "minutes": 25, "difficulty": "easy", "why": "Trending on TikTok this week"},
-    {"id": "dutch-baby", "name": "Dutch Baby", "image": null, "minutes": 30, "difficulty": "easy", "why": "Big on Instagram brunch posts"},
-    {"id": "avocado-toast", "name": "Avocado Toast", "image": null, "minutes": 10, "difficulty": "easy", "why": "Always a favourite"}
+    {
+      "id": 0,
+      "name": null,
+      "image": "https://www.allrecipes.com/thmb/kpI2DQrw7zDake_7B8wOJRkZ-6Y=/1500x0/filters:no_upscale():max_bytes(150000):strip_icc()/ALR-recipe-16895-fluffy-french-toast-hero-01-ddmfs-4x3-7fd61e054f2c4f0f868b7ab0dd8767ae.jpg",
+      "description": "A small scoop of flour makes this the best French toast recipe! Thickening the batter just a little makes tender, fluffy toast and helps it brown nicely."
+    },
+    {
+      "id": 1,
+      "name": null,
+      "image": "https://www.justonecookbook.com/wp-content/uploads/2022/06/Miso-Soup-8297-I.jpg",
+      "description": "It‘s super easy to make authentic and homemade Japanese Miso Soup! In this recipe, I show you how to make quick and easy soup stock (dashi) from scratch, then make classic miso soup with tofu and wakame seaweed. It‘s delicious and has many health benefits."
+    },
+    {
+      "id": 2,
+      "name": null,
+      "image": "https://www.themediterraneandish.com/wp-content/uploads/2026/05/TMD-Shakshuka-Leads-01.jpg",
+      "description": "To make shakshuka, gently poach eggs in a simmering mixture of tomatoes, bell peppers, onions, andgarlic. A few warm spices and some fresh herbs complete this satisfying one-skillet recipe!"
+    }
   ],
   "video": {
     "view": "video",
-    "dish": "Shakshuka",
-    "main": {"id": "SjCkW-oAFQ8", "title": "Shakshuka | Basics with Babish", "minutes": 7, "thumb": "https://i.ytimg.com/vi/SjCkW-oAFQ8/hqdefault.jpg"},
-    "alternates": [
-      {"id": "urMyZ1WosYE", "title": "Easy Shakshuka Recipe | How to Make The Best Shakshuka", "minutes": 4, "thumb": "https://i.ytimg.com/vi/urMyZ1WosYE/hqdefault.jpg"},
-      {"id": "voinXU09-Ns", "title": "How to Make Shakshuka", "minutes": 4, "thumb": "https://i.ytimg.com/vi/voinXU09-Ns/hqdefault.jpg"},
-      {"id": "m5Kn9WmOCrw", "title": "Easy Amazing Shakshuka Recipe", "minutes": 9, "thumb": "https://i.ytimg.com/vi/m5Kn9WmOCrw/hqdefault.jpg"}
-    ]
+    "dish": "French toast",
+    "main": {
+      "id": "Km7KRbKVu88",
+      "title": "Easy French Toast Recipe",
+      "minutes": null,
+      "thumb": "https://i.ytimg.com/vi/Km7KRbKVu88/hqdefault.jpg",
+      "description": "This classic French toast recipe is so easy to whip up in a matter of minutes for a delicious breakfast. The slices cook up golden and crisp on the outside, ..."
+    },
+    "alternates": []
   },
   "steps": {
     "view": "steps",
-    "dish": "Shakshuka",
-    "video_id": "SjCkW-oAFQ8",
+    "dish": "French toast",
+    "video_id": "Km7KRbKVu88",
     "steps": [
-      {"title": "Heat the oil", "icon": "🫒", "tags": ["medium heat", "1 min"], "detail": "Warm 2 tbsp olive oil in a wide skillet.", "video_start": 30},
-      {"title": "Soften the onion", "icon": "🧅", "tags": ["medium heat", "5 min"], "detail": "Add a diced onion and pepper. Stir until soft, not brown.", "video_start": 60},
-      {"title": "Add garlic and spices", "icon": "🧄", "tags": ["1 min", "cumin", "paprika"], "detail": "Stir in garlic, cumin and paprika until fragrant.", "video_start": 120},
-      {"title": "Simmer the tomatoes", "icon": "🍅", "tags": ["low heat", "10 min"], "detail": "Pour in crushed tomatoes. Simmer until thick.", "video_start": 170},
-      {"title": "Crack in the eggs", "icon": "🥚", "tags": ["4-6 eggs"], "detail": "Make wells in the sauce and crack an egg into each.", "video_start": 260},
-      {"title": "Cover and finish", "icon": "🌿", "tags": ["low heat", "6 min"], "detail": "Cover until the whites set. Top with herbs and feta.", "video_start": 320}
+      {
+        "title": "Whisk the batter",
+        "icon": "🥣",
+        "tags": [
+          "2 min",
+          "eggs",
+          "milk"
+        ],
+        "detail": "Whisk eggs, milk, a spoon of flour, sugar and cinnamon until smooth.",
+        "video_start": 20
+      },
+      {
+        "title": "Heat the pan",
+        "icon": "🍳",
+        "tags": [
+          "medium heat",
+          "butter"
+        ],
+        "detail": "Melt a knob of butter in a wide non-stick pan.",
+        "video_start": 55
+      },
+      {
+        "title": "Soak the bread",
+        "icon": "🍞",
+        "tags": [
+          "10 sec each side"
+        ],
+        "detail": "Dip each slice briefly so it's coated but not soggy.",
+        "video_start": 75
+      },
+      {
+        "title": "Fry until golden",
+        "icon": "🔥",
+        "tags": [
+          "medium heat",
+          "3 min each side"
+        ],
+        "detail": "Cook until golden and crisp, then flip once.",
+        "video_start": 100
+      },
+      {
+        "title": "Keep warm",
+        "icon": "♨️",
+        "tags": [
+          "low oven"
+        ],
+        "detail": "Hold finished slices in a low oven while you cook the rest.",
+        "video_start": 140
+      },
+      {
+        "title": "Serve",
+        "icon": "🍓",
+        "tags": [
+          "berries",
+          "maple syrup"
+        ],
+        "detail": "Top with berries, powdered sugar and a drizzle of syrup.",
+        "video_start": 165
+      }
     ]
+  },
+  "raw": {
+    "recommend": [
+      {
+        "image_url": "https://www.allrecipes.com/thmb/kpI2DQrw7zDake_7B8wOJRkZ-6Y=/1500x0/filters:no_upscale():max_bytes(150000):strip_icc()/ALR-recipe-16895-fluffy-french-toast-hero-01-ddmfs-4x3-7fd61e054f2c4f0f868b7ab0dd8767ae.jpg",
+        "description": "A small scoop of flour makes this the best French toast recipe! Thickening the batter just a little makes tender, fluffy toast and helps it brown nicely."
+      },
+      {
+        "image_url": "https://www.justonecookbook.com/wp-content/uploads/2022/06/Miso-Soup-8297-I.jpg",
+        "description": "It‘s super easy to make authentic and homemade Japanese Miso Soup! In this recipe, I show you how to make quick and easy soup stock (dashi) from scratch, then make classic miso soup with tofu and wakame seaweed. It‘s delicious and has many health benefits."
+      },
+      {
+        "image_url": "https://www.themediterraneandish.com/wp-content/uploads/2026/05/TMD-Shakshuka-Leads-01.jpg",
+        "description": "To make shakshuka, gently poach eggs in a simmering mixture of tomatoes, bell peppers, onions, andgarlic. A few warm spices and some fresh herbs complete this satisfying one-skillet recipe!"
+      }
+    ],
+    "video": {
+      "video_url": "https://www.youtube.com/watch?v=Km7KRbKVu88",
+      "description": "This classic French toast recipe is so easy to whip up in a matter of minutes for a delicious breakfast. The slices cook up golden and crisp on the outside, ... {\"name\":\"Easy French Toast Recipe\"}"
+    }
   }
 }

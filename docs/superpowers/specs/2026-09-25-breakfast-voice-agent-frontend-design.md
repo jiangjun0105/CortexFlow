@@ -79,7 +79,7 @@ A short greeting ("Good morning — what are we cooking?") plus 2–3 example pr
 │  Say "the first one" or the dish name    │
 └──────────────────────────────────────────┘
 ```
-- Exactly 3 cards in a row (from the recommender). Each card shows an image, name, total time, difficulty tag and a one-line "why it's popular".
+- 3 cards in a row (from the recommender). Each card shows a large image (cover-cropped, 4:3), the `name` if present, and the `description` clamped to 3 lines. The recommender doesn't send names today, so the description is the main text.
 - Cards fly in with a short stagger.
 - **Selection:** when a dish is chosen (by voice, or by clicking the card), that card grows and the rest fade out. Then the video view loads.
 
@@ -145,7 +145,7 @@ Audio travels as **binary frames**: up = one utterance of raw float32 16kHz PCM,
 { "type": "caption", "text": "Sure, pulling that up…" }
 { "type": "view",    "view": "dishes", "meals": [            // always 3, from the recommender
     { "id": "shakshuka", "name": "Shakshuka", "image": "https://…",
-      "minutes": 25, "difficulty": "easy", "why": "Trending on TikTok this week" } ] }
+      "description": "To make shakshuka, gently poach eggs…" } ] }   // name may be null
 { "type": "view",    "view": "video", "dish": "Shakshuka",
   "main": { "id": "abc123", "title": "…", "minutes": 8, "thumb": "https://…" },
   "alternates": [ { "id": "…", "title": "…", "minutes": 12, "thumb": "…" } ] }

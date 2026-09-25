@@ -23,7 +23,7 @@ Goal: a quick local demo with one user and one browser tab, running on my Mac.
 | # | Module | In | Out | Implementation |
 |---|---|---|---|---|
 | 1 | **Voice agent** | audio (+ optional text instruction) | streamed audio + text | LFM2.5-Audio via `lfm_audio.py`, one persistent `ChatState` |
-| 2 | **Search agent** | text query (+ current video) | JSON: `video` *or* `steps` | Claude API (`claude-sonnet-5`) + yt-dlp |
+| 2 | **Search agent** | text query (+ current video) | JSON: `video` *or* `steps` | External web agent (different model, built separately). v1 uses a stub with fixtures. |
 | 3 | **Recommender** | text query | JSON: 3 meals | Separate service, based on social-media data. v1 uses a stub with sample data. |
 | — | **ASR** | audio | user text | `mlx_whisper.transcribe` |
 | — | **Router** | transcript + screen state | route + target | Jev `POST https://api.typesafe.ai/v1/systemone` |
@@ -53,7 +53,7 @@ Modules 2 and 3 are plain `async def fn(query: str, **ctx) -> dict`. The orchest
 server.py          FastAPI, WebSocket, SESSION, turn() orchestration, nav handling
 voice_agent.py     VoiceAgent: persistent LFM ChatState, streaming reply(audio=None, text=None)
 router.py          Jev call: questions, route selection, guards
-search_agent.py    video(query) / steps(video_id, query)  — Claude + yt-dlp
+search_agent.py    video(query) / steps(video_id, query)  — stub over fixtures; client for the external web agent later
 recommender.py     recommend(query) — stub returning fixtures until the real service exists
 lfm_audio.py       unchanged: load(), trim_pauses(); voice_agent.py imports from it
 web/               index.html, app.js, style.css, mock.js
@@ -61,8 +61,8 @@ cache/             search/recommender results as JSON (gitignored)
 test_router.py     labelled route scenarios (see §12)
 ```
 
-Run: `ANTHROPIC_API_KEY=… TYPESAFE_API_KEY=… python server.py`, then open `http://localhost:8000`.
-New dependencies: `fastapi`, `uvicorn`, `mlx-whisper`, `anthropic`, `yt-dlp`, `httpx`.
+Run: `TYPESAFE_API_KEY=… python server.py`, then open `http://localhost:8000`.
+New dependencies: `fastapi`, `uvicorn`, `mlx-whisper`, `httpx`.
 
 ## 5. The turn
 
@@ -190,29 +190,61 @@ Instructions and criteria live in `router.py` as one dict, and they're the "syst
 
 ## 9. Search agent (module 2)
 
-`search_agent.video(query)` → `view: video`
-- `yt-dlp` `ytsearch5:{query} recipe`, `extract_flat`. It keeps entries shorter than 20 min; the first becomes `main` and up to 3 more become `alternates`.
-- Returns `{id, title, minutes, thumb}` with `thumb = https://i.ytimg.com/vi/<id>/hqdefault.jpg`.
+**External: built separately, on a different model; not part of this project.** This project owns only the interface and a stub.
 
-`search_agent.steps(video_id, query)` → `view: steps`
-1. yt-dlp auto-captions (`writeautomaticsub`, `subtitleslangs=["en"]`, json3, `skip_download`).
-2. The captions are collapsed to lines like `[95s] now add the onion…`.
-3. One Claude call returns strict JSON: `[{title, icon, tags, detail, video_start}]`, with 5–8 steps, title ≤ 5 words and detail ≤ 2 sentences.
-4. With no captions, Claude writes standard steps from the video title, and `video_start` is `null`.
+**Raw output from the web agent (the real format, from its example output):**
+```jsonc
+// video
+{ "video_url": "https://www.youtube.com/watch?v=Km7KRbKVu88",
+  "description": "This classic French toast recipe is so easy… {\"name\":\"Easy French Toast Recipe\"}" }
+// steps: format not yet known
+```
 
-Invalid JSON is retried once, then counts as a failure. Results are cached in `cache/` by query or video ID.
+**`search_agent.py` adapts raw output into the internal view shapes.** Only this file knows the raw format:
+```jsonc
+// video(query) →
+{ "view": "video", "dish": "<query>",
+  "main": { "id": "Km7KRbKVu88", "title": "Easy French Toast Recipe", "minutes": null,
+            "thumb": "https://i.ytimg.com/vi/Km7KRbKVu88/hqdefault.jpg",
+            "description": "This classic French toast recipe is so easy…" },
+  "alternates": [] }
+```
+
+Video adapter rules:
+- `id` comes from `video_url`, parsed as the `v=` query param, the last path segment for `youtu.be/…`, or `/shorts/…`. A URL that doesn't parse raises an error (module failure).
+- `title` comes from a trailing `{"name": …}` JSON blob in `description` if present, stripped from the description. Otherwise it's the first sentence of the description, truncated to 60 chars.
+- `thumb` is built from `id`, `minutes` is `null`, and `alternates` is empty. The web agent returns only one video.
+
+```jsonc
+// steps(video_id, query) → (internal shape; the adapter maps raw output to this once the raw format is known)
+{ "view": "steps", "dish": "French toast", "video_id": "Km7KRbKVu88",
+  "steps": [ { "title": "≤5 words", "icon": "🥣", "tags": ["2 min"],
+               "detail": "≤2 short sentences", "video_start": 20 /* seconds, or null */ } ] }  // 5-8 steps
+```
+The server calls both with a 20 s timeout, and any exception counts as a module failure (§14).
+
+v1: the stub adapts `fixtures/demo.json` `raw.video`, and returns `steps` from the fixture. When the web agent exists, only the fetch changes and the adapters stay. The server caches results in `cache/` by query or video ID.
 
 ## 10. Recommender (module 3)
 
 `recommender.recommend(query)` → `view: dishes`
 
-Contract (the real service must return this):
+**Raw output from the service (the real format):**
 ```jsonc
-{ "meals": [ { "id": "shakshuka", "name": "Shakshuka", "image": "https://…",
-               "minutes": 25, "difficulty": "easy",
-               "why": "Trending on TikTok this week" } ] }        // exactly 3
+[ { "image_url": "https://…/fluffy-french-toast-hero.jpg",
+    "description": "A small scoop of flour makes this the best French toast recipe! …" } ]   // 3 items
 ```
-v1: a stub returns a fixture from `cache/recommend-fixture.json`. When the social-media service is ready, only the body of `recommend()` changes.
+
+**`recommender.py` adapts it to:**
+```jsonc
+{ "view": "dishes",
+  "meals": [ { "id": 0, "name": null, "image": "https://…", "description": "A small scoop of flour…" } ] }
+```
+- `id` = the list index.
+- `name` = `null`, because the service sends none. Everything downstream uses `label(meal) = name or the first sentence of description`: Jev's `dishes_on_screen`, the ANNOUNCE summary and the query sent to the search agent.
+- Items without `image_url` or `description` are dropped, and an empty result counts as a module failure.
+
+v1: the stub adapts `fixtures/demo.json` `raw.recommend`. When the service is ready, only the fetch changes.
 
 `build_query(text, SESSION)` = the latest user text plus the last 2 user turns, e.g. "breakfast for my wife; most popular recently". Modules 2 and 3 both receive this.
 
@@ -272,7 +304,6 @@ All timings are measured from the end of speech (when the server receives the PC
 | ASR fails or is empty | route `chat`; voice agent answers from audio |
 | Jev timeout or error | route `chat` (fails open) |
 | Module 2/3 error, timeout (20 s) or bad JSON after one retry | `FAILED` note → voice agent apologises; screen unchanged |
-| yt-dlp: no results | same as a module error |
 | Video won't embed | frontend skips to the next alternate |
 | Route guard fails | `chat` |
 | Voice agent error | send `error`, `state: idle`; the next turn works normally |
@@ -293,8 +324,7 @@ Failures are never cached.
 2. `voice_agent.py`: streaming reply, and a check that notes work (§6).
 3. `server.py` + protocol, with the stub recommender and a fake search agent.
 4. Frontend against `?mock=1`, then against the server.
-5. The real `search_agent.py` (yt-dlp, then steps via Claude).
-6. Plug in the real recommender when it exists.
+5. Plug in the real web agent and recommender when they exist.
 
 ## 17. Out of scope (v1)
 

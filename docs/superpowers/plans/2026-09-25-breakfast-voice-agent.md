@@ -6,7 +6,7 @@
 
 **Architecture:** One FastAPI process with one WebSocket. Per turn: mlx-whisper ASR → Jev router → either the LFM voice agent replies, or the voice agent reassures while the search agent or recommender fetches JSON for the stage. Specs: `docs/superpowers/specs/2026-09-25-breakfast-voice-agent-{technical,frontend}-design.md`. **Read both before starting any task.**
 
-**Tech Stack:** Python 3.12 (`.venv`, managed with `uv`), FastAPI + uvicorn, liquid-audio (LFM2.5-Audio-1.5B, torch/mps), mlx-whisper, TypeSafe Jev (HTTP), Anthropic SDK (`claude-sonnet-5`), yt-dlp, vanilla HTML/CSS/JS.
+**Tech Stack:** Python 3.12 (`.venv`, managed with `uv`), FastAPI + uvicorn, liquid-audio (LFM2.5-Audio-1.5B, torch/mps), mlx-whisper, TypeSafe Jev (HTTP), vanilla HTML/CSS/JS. The search agent and recommender are external services, stubbed.
 
 ---
 
@@ -19,7 +19,7 @@
 | Jev call pattern (reference only, other repo) | `~/Projects/sb/apps/server/convai/sb_convai/services/agent_runtime/retrieval_gate.py`, `~/Projects/sb/apps/server/convai/scripts/bench_jev_gate.py` |
 | Sample speech | `question.wav`, `followup.wav`, `q10.wav` |
 
-Missing: everything else. Packages missing from `.venv`: fastapi, uvicorn, mlx-whisper, anthropic, yt-dlp. Keys missing from `.env`: `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`.
+Missing: everything else. Packages missing from `.venv`: fastapi, uvicorn, mlx-whisper, anthropic, yt-dlp. Key missing from `.env`: `TYPESAFE_API_KEY`.
 
 Not used by this plan: `talk_space.py`, `space/` (HF Space), `Duplex`/`utterance` (VAD and barge-in are out of scope).
 
@@ -28,8 +28,8 @@ Not used by this plan: `talk_space.py`, `space/` (HF Space), `Duplex`/`utterance
 ```
 Wave 0 (sequential, lead)   T0 setup: deps, keys, fixtures, contracts
           │
-Wave 1 (parallel, 7 agents) T1 router   T2 voice agent   T3 ASR   T4 search agent   T5 server   T6a web shell   T6b stage views
-          │                  (Jev key)    (GPU)            (GPU)    (Claude key)      (fakes)     (mock mode)     (dev harness)
+Wave 1 (parallel, 6 agents) T1 router   T2 voice agent   T3 ASR   T5 server + stubs   T6a web shell   T6b stage views
+          │                  (Jev key)    (GPU)            (GPU)    (fakes)             (mock mode)     (dev harness)
 Wave 2 (sequential, lead)   T7 integration: real modules into server, frontend on live server, demo run
 ```
 
@@ -69,9 +69,10 @@ async def steps(video_id: str, query: str) -> dict: ...  # {"view":"steps","dish
 async def recommend(query: str) -> dict: ...         # {"view":"dishes","meals":[Meal]*3}
 ```
 
-- `Video = {id, title, minutes, thumb}`
+- `Video = {id, title, minutes: int | None, thumb, description}`
 - `Step = {title, icon, tags: [str], detail, video_start: int | None}`
-- `Meal = {id, name, image, minutes, difficulty, why}`
+- `Meal = {id: int, name: str | None, image, description}`. Anything that needs a meal's text uses `label(meal) = meal["name"] or first sentence of meal["description"]`, defined once in `recommender.py` and imported by the router and the voice agent. `select_dish` carries the int `id`.
+- Real raw formats and adapter rules: technical spec §9 and §10.
 
 Session dict: exactly technical spec §12. WebSocket messages: technical spec §11. The server sends a module result as `{"type": "view", **payload}`.
 
@@ -83,8 +84,7 @@ Session dict: exactly technical spec §12. WebSocket messages: technical spec §
 | `router.py`, `test_router.py` | T1 | Jev questions, `pick` guards, benchmark |
 | `voice_agent.py` | T2 | LFM session, notes, streaming |
 | `asr.py`, `test_asr.py` | T3 | mlx-whisper wrapper |
-| `search_agent.py`, `test_search_agent.py` | T4 | yt-dlp + Claude steps + cache |
-| `server.py`, `recommender.py`, `test_server.py` | T5 | FastAPI, WS, SESSION, `turn()`, nav |
+| `server.py`, `recommender.py`, `search_agent.py`, `test_server.py` | T5 | FastAPI, WS, SESSION, `turn()`, nav, stubs for the two external modules |
 | `web/index.html`, `web/app.js`, `web/style.css`, `web/mock.js` | T6a | shell: layout, orb, audio, socket, metrics, mock |
 | `web/views.js`, `web/views.css`, `web/views-dev.html` | T6b | stage views, YouTube player, transitions |
 
@@ -113,22 +113,14 @@ pytest
 Run: `uv pip install --python .venv/bin/python -r requirements.txt`
 Expected: `.venv/bin/python -c "import fastapi, mlx_whisper, anthropic, yt_dlp"` exits 0.
 
-- [ ] **Step 2: Keys.** You add `TYPESAFE_API_KEY=` and `ANTHROPIC_API_KEY=` to `.env` (already gitignored). Code reads keys from `os.environ` first, then from `.env` using the same one-liner as `talk_space.py`.
+- [ ] **Step 2: Keys.** You add `TYPESAFE_API_KEY=` to `.env` (already gitignored). Code reads keys from `os.environ` first, then from `.env` using the same one-liner as `talk_space.py`.
 
 - [ ] **Step 3: `.gitignore`.** Append `cache/`.
 
-- [ ] **Step 4: `fixtures/demo.json`.** Real data for one shakshuka run. Fetch a real embeddable video ID with `yt-dlp --flat-playlist -j "ytsearch3:shakshuka recipe"`, so the mock and fake modules show a working player:
-```json
-{
-  "meals": [ {"id": "shakshuka", "name": "Shakshuka", "image": null, "minutes": 25, "difficulty": "easy", "why": "Trending on TikTok this week"},
-             {"id": "dutch-baby", "name": "Dutch Baby", "image": null, "minutes": 30, "difficulty": "easy", "why": "Big on Instagram brunch posts"},
-             {"id": "avocado-toast", "name": "Avocado Toast", "image": null, "minutes": 10, "difficulty": "easy", "why": "Always a favourite"} ],
-  "video": {"dish": "Shakshuka", "main": {"id": "<real id>", "title": "<real title>", "minutes": 8, "thumb": "https://i.ytimg.com/vi/<real id>/hqdefault.jpg"},
-            "alternates": [ "<2 more real entries>" ]},
-  "steps": [ {"title": "Heat the oil", "icon": "🫒", "tags": ["medium heat", "1 min"], "detail": "Warm 2 tbsp olive oil in a wide skillet.", "video_start": 30},
-             "<5 more steps>" ]
-}
-```
+- [x] **Step 4: `fixtures/demo.json`** (done). It contains:
+  - `raw.recommend` and `raw.video`: the real example output from the two external services.
+  - `meals`, `video`: the internal shapes the adapters must produce from `raw` (the T5 adapter tests assert exactly this).
+  - `steps`: an internal steps view with 6 French toast steps.
 
 - [ ] **Step 5: Commit** the specs, the plan and the setup files: `git add docs requirements.txt fixtures .gitignore && git commit -m "chore: breakfast agent specs, plan, deps, fixtures"`
 
@@ -184,7 +176,7 @@ Expected: ≥ 9/10 correct and p50 ≤ 200 ms. **Report the numbers to the lead.
 **Reference:** technical spec §6. Reuse `lfm_audio.load()` and `trim_pauses()`. Copy the streaming loop and the history `chat.append(...)` from `lfm_audio.voice()` (don't import `voice()` itself). Do **not** modify `lfm_audio.py`.
 
 - [ ] **Step 1:** Implement `VoiceAgent` per the contract, with the system prompt and the `REASSURE` / `FAILED` / `announce()` text from spec §6. `announce(view)` builds the summary from `view["view"]`:
-  - `dishes` → "3 breakfasts: A, B, C"
+  - `dishes` → "3 breakfasts: A; B; C", using `label(meal)` from `recommender.py`
   - `video` → "a N-minute video: TITLE"
   - `steps` → "N steps; step 1 is TITLE"
 - [ ] **Step 2: Notes check (the spec's "verify during build").** Put the audio and the note in the same user turn: `chat.add_audio(...)` then `chat.add_text(note)`.
@@ -226,39 +218,44 @@ assert asr.transcribe(np.zeros(0, np.float32)) == ""       # never raises
 
 ---
 
-### Task 4: Search agent — `search_agent.py`, `test_search_agent.py`
+### Task 4: dropped
 
-**Reference:** technical spec §9. Model: `claude-sonnet-5`. Blocking yt-dlp and Anthropic calls run via `asyncio.to_thread`, or use `anthropic.AsyncAnthropic`.
-
-- [ ] **Step 1: Offline tests first** for the pure helpers:
-  - `parse_steps(text) -> list[Step]`: extracts the JSON array even inside ```json fences, and raises `ValueError` on garbage.
-  - `captions_to_lines(json3: dict) -> str`: produces `"[95s] now add the onion"` lines.
-  - cache round-trip: `cached(key, fn)` writes `cache/<key>.json`, a second call doesn't call `fn`, and a failure isn't cached.
-- [ ] **Step 2:** Run. Expected: fail.
-- [ ] **Step 3:** Implement the helpers. Run. Expected: pass.
-- [ ] **Step 4:** Implement `video(query)`: `ytsearch5:{query} recipe`, `extract_flat`, keep entries under 20 min, first = main, up to 3 alternates, `dish = query` title-cased.
-- [ ] **Step 5:** Implement `steps(video_id, query)`:
-  1. auto-captions json3 via yt-dlp to a temp dir
-  2. `captions_to_lines`
-  3. one Claude call using the spec §9 prompt
-  4. `parse_steps`, retrying once on `ValueError`
-
-  With no captions, the prompt uses only the title and sets `video_start` to null.
-- [ ] **Step 6: Live check** (skip if there's no `ANTHROPIC_API_KEY`). `asyncio.run(video("shakshuka"))`, then `steps(main.id, "shakshuka")`. Print the titles and timestamps.
-  Expected:
-  - at least one alternate
-  - 5–8 steps
-  - `video_start` values rise in order
-  - a second run is instant (cache hit)
-- [ ] **Step 7:** Commit with message `feat: search agent (yt-dlp + claude steps)`.
+The search agent (module 2) is external, built separately on a different model. Its stub lives in T5.
 
 ---
 
-### Task 5: Server — `server.py`, `recommender.py`, `test_server.py`
+### Task 5: Server — `server.py`, `recommender.py`, `search_agent.py`, `test_server.py`
 
-**Reference:** technical spec §5, §11–14. Build against **fakes**. Module functions are looked up as module attributes (`server.asr`, `server.router`, …), so tests and T7 can swap them.
+**Reference:** technical spec §5, §9–14. Build against **fakes**. Module functions are looked up as module attributes (`server.asr`, `server.router`, …), so tests and T7 can swap them.
 
-- [ ] **Step 1: `recommender.py`** returns `{"view": "dishes", "meals": fixtures["meals"]}` from `fixtures/demo.json`. Mark it: `# ponytail: fixture stub; swap body for the social-media service call`.
+- [ ] **Step 1: Adapters and stubs for the two external modules.** Only the *fetch* is stubbed; the adapters are real code:
+  - `recommender.py`:
+    - `adapt(raw: list) -> dict` and `label(meal) -> str`, per technical spec §10.
+    - `recommend(query)` = `adapt(fixtures["raw"]["recommend"])` after `await asyncio.sleep(1.5)`, marked `# ponytail: fixture fetch; swap for the recommender service call`.
+  - `search_agent.py`:
+    - `adapt_video(raw: dict, dish: str) -> dict`, per technical spec §9.
+    - `video(query)` = `adapt_video(fixtures["raw"]["video"], query)` after a 1.5 s sleep.
+    - `steps(video_id, query)` returns `fixtures["steps"]` after a 1.5 s sleep.
+    - Same `ponytail:` marker.
+
+  Adapter tests, in `test_server.py` or a small `test_adapters.py`:
+  ```python
+  import json
+  from recommender import adapt, label
+  from search_agent import adapt_video
+  F = json.load(open("fixtures/demo.json"))
+  assert adapt(F["raw"]["recommend"])["meals"] == F["meals"]
+  assert label(F["meals"][2]).startswith("To make shakshuka")
+  assert adapt_video(F["raw"]["video"], "French toast") == F["video"]
+  for url in ("https://youtu.be/Km7KRbKVu88", "https://www.youtube.com/shorts/Km7KRbKVu88",
+              "https://www.youtube.com/watch?v=Km7KRbKVu88&t=30s"):
+      assert adapt_video({"video_url": url, "description": "x"}, "d")["main"]["id"] == "Km7KRbKVu88"
+  for bad in (lambda: adapt_video({"video_url": "https://example.com", "description": "x"}, "d"),
+              lambda: adapt([]),
+              lambda: adapt([{"image_url": "", "description": ""}])):   # all items dropped → empty
+      try: bad(); assert False, "should raise"
+      except ValueError: pass
+  ```
 - [ ] **Step 2: Test first** (`test_server.py`, pytest + `fastapi.testclient.TestClient`). Fakes:
   - `asr.transcribe` returns preset text
   - `router.route` returns a preset route
@@ -362,7 +359,7 @@ window.Views = {
 - [ ] **Step 1: A standalone harness `web/views-dev.html`.** It loads `style.css` (tokens only; if T6a hasn't created it yet, copy the `:root` tokens inline in the harness), `views.css`, the YouTube iframe API and `views.js`. It has buttons that call `Views.show(...)` / `Views.control(...)` with fixture data, and logs `onAction` calls. This is how the views are built without T6a.
 - [ ] **Step 2: `welcome`:** the greeting "Good morning — what are we cooking?" plus 3 example chips. Clicking one calls `onAction({type:"text", text})`.
 - [ ] **Step 3: `dishes`:**
-  - 3 cards in a row with a staggered fly-in: image or gradient placeholder with emoji, name, minutes, difficulty tag, and a "why" line.
+  - 3 cards in a row with a staggered fly-in: a large 4:3 cover-cropped image (a gradient placeholder if it fails to load), `name` if not null, and `description` clamped to 3 lines. `minutes` may be null, in which case it's hidden.
   - Clicking a card calls `onAction({type:"action", name:"select_dish", id})`.
   - The selected card grows and the others fade out. This plays when the next `video` view arrives *after* a dish was selected, or immediately on click.
 - [ ] **Step 4: `video`:**
@@ -406,5 +403,4 @@ window.Views = {
 | Jev with ~10 questions > 200 ms | T1 step 6 | two calls: route, then target |
 | LFM ignores notes | T2 step 3 | separate system turn; if that fails too, the server plays TTS of a fixed reassure line (`lfm_audio.run` TTS) |
 | LFM + whisper on the GPU at the same time | T2/T3 in parallel, and live | they run in sequence per turn anyway; only test runs overlap |
-| yt-dlp captions blocked or rate-limited | T4 step 6 | title-only steps (already in spec), or the cache |
-| `claude-sonnet-5` step JSON too slow | T4 | cache warmed by one run before the demo |
+| The external web agent is slow | T7 live run | reassure line covers ~5 s; the server cache makes repeats instant |
