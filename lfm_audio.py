@@ -3,7 +3,7 @@
   python lfm_audio.py tts "Hello there" -o out.wav [--voice "UK female"]
   python lfm_audio.py asr in.wav
   python lfm_audio.py chat in.wav -o answer.wav     # speech in -> text + speech out
-  python lfm_audio.py voice                         # live multi-turn voice chat via mic/speakers
+  python lfm_audio.py voice [--no-show-text] [--no-transcript] [--debug]   # live multi-turn voice chat
 """
 import argparse
 import itertools
@@ -119,10 +119,26 @@ def mic_blocks(sd):
             yield q.get()
 
 
+def transcribe(processor, model, wav, sr):
+    """What was said in wav, via the same model in ASR mode (chat mode never transcribes the user)."""
+    chat = ChatState(processor)
+    chat.new_turn("system")
+    chat.add_text("Perform ASR.")
+    chat.end_turn()
+    chat.new_turn("user")
+    chat.add_audio(wav, sr)
+    chat.end_turn()
+    chat.new_turn("assistant")
+    toks = [t for t in model.generate_sequential(**chat, max_new_tokens=512) if t.numel() == 1]
+    return processor.text.decode(torch.cat(toks), skip_special_tokens=True).strip() if toks else ""
+
+
 @torch.no_grad()
-def voice(debug=False):
+def voice(debug=False, show_text=True, transcript=True):
     """Hands-free multi-turn speech chat: talk whenever, reply plays through speakers. Ctrl+C to quit.
 
+    show_text: stream the agent's reply text as it's generated (it runs ahead of the speech)
+    transcript: print what you said (ASR runs after generation, while the reply is still playing)
     debug: print mic levels + reply text, save voice_debug/turnN_{heard,reply}.wav
     """
     import os
@@ -166,7 +182,7 @@ def voice(debug=False):
         chat.end_turn()
         chat.new_turn("assistant")
 
-        # text tokens are the model's script for the speech; kept for history, not shown
+        # text tokens are the model's script for the speech; kept for history, shown with --show-text
         text, audio, modality, played = [], [], [], []
         marks = {}  # event -> perf_counter(), first occurrence only
 
@@ -178,6 +194,9 @@ def voice(debug=False):
                 for t in model.generate_interleaved(**chat, max_new_tokens=512, audio_temperature=1.0, audio_top_k=4):
                     if t.numel() == 1:
                         mark("first text token")
+                        if show_text:
+                            prefix = "" if text else "agent: "
+                            print(prefix + processor.text.decode(t, skip_special_tokens=True), end="", flush=True)
                         text.append(t)
                         modality.append(LFMModality.TEXT)
                     else:
@@ -193,6 +212,12 @@ def voice(debug=False):
             mark("first bytes to speaker")  # first non-silent chunk, after trim_pauses
             speaker.q.put(chunk)
             played.append(chunk)
+        if show_text and text:
+            print(flush=True)
+        if transcript:  # generation is done; the reply keeps playing from the speaker's queue meanwhile
+            said = transcribe(processor, model, wav, MIC_SR)
+            mark("transcript ready")
+            print(f'you said: "{said}"', flush=True)
         speaker.drain()
         mark("playback done")
         if speaker.first_played:
@@ -262,12 +287,16 @@ if __name__ == "__main__":
     p.add_argument("-o", "--out", default="out.wav")
     p.add_argument("--voice", default="US female", help="US male | US female | UK male | UK female")
     p.add_argument("--debug", action="store_true", help="voice: print levels/reply text, save wavs to voice_debug/")
+    p.add_argument("--show-text", action=argparse.BooleanOptionalAction, default=True,
+                   help="voice: stream the agent's reply text")
+    p.add_argument("--transcript", action=argparse.BooleanOptionalAction, default=True,
+                   help="voice: print what you said (ASR, during playback)")
     a = p.parse_args()
     print(f"device: {DEVICE}")
 
     if a.task == "voice":
         try:
-            voice(a.debug)
+            voice(a.debug, a.show_text, a.transcript)
         except KeyboardInterrupt:
             print("\nbye")
     elif a.input is None:
