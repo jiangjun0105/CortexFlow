@@ -118,7 +118,7 @@ _client = None
 async def route(text, session):
     global _client
     try:
-        _client = _client or httpx.AsyncClient(timeout=1.0)
+        _client = _client or httpx.AsyncClient(timeout=1.5)
         r = await asyncio.wait_for(_client.post(
             URL, headers={"Authorization": f"Bearer {KEY}"},
             json={"state": _state(text, session), "model": "jev-latest", "questions": _questions(session)}), 1.0)

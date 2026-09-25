@@ -5,22 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Breakfast voice agent</title>
   <link rel="icon" href="data:,">
-  <style>
-    body { margin: 0; min-height: 100vh; display: grid; place-content: center; gap: 1.5rem; text-align: center;
-           background: #1b1714; color: #f3e9dc; font: 20px/1.4 system-ui, sans-serif; }
-    #talk { font: inherit; padding: 1.2rem 2.4rem; border-radius: 999px; border: 0; cursor: pointer;
-            background: #f2a93b; color: #1b1714; user-select: none; touch-action: none; }
-    #talk:disabled { opacity: .4; cursor: default; }
-    #talk.on { background: #ffd27a; transform: scale(1.05); }
-    #caption { min-height: 3em; max-width: 36rem; font-size: 1.4rem; }
-    #status, #metrics { font-size: .9rem; opacity: .7; font-variant-numeric: tabular-nums; }
-  </style>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="views.css">
+  <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
   <div id="caption"></div>
   <div><button id="talk" disabled>Start</button></div>
   <div id="status">connecting…</div>
   <div id="metrics"></div>
+  <script src="views.js"></script>
+  <script src="ui.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

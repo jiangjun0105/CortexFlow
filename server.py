@@ -1,4 +1,4 @@
-"""Breakfast voice agent backend, slice 1: hands-free voice chat (no ASR / router / search yet).
+"""Breakfast voice agent backend: hands-free voice chat + ASR -> Jev router -> web agent lookups -> stage views.
 
   .venv/bin/python server.py      then open http://localhost:8000
 
@@ -31,13 +31,19 @@ MAX_FRAME_S = 1  # one mic frame; the browser sends ~0.1 s
 HALF_DUPLEX = False
 AGENT = None  # VoiceAgent, loaded at startup; tests set a fake before starting the app
 VAD = None  # block (float32, 512 samples) -> speech prob; silero at startup, tests set a fake
+ASR = None  # pcm -> text (mlx-whisper), loaded with the real agent; None: every turn is plain chat
+ROUTE = None  # async (text, session) -> (route, target, scores): the Jev router
+LOOKUP_TIMEOUT_S = 45  # a cold recommend is ~29 s (3 Nimble search+scrape); cached after that
 MODEL_LOCK = asyncio.Lock()
-SESSION = {"ws": None}  # single session (design §1): a new connection replaces the old one
+# single session (design §1): a new connection replaces the old one
+SESSION = {"ws": None, "screen": "welcome", "views": {}, "meals": [], "dish": None, "video": None,
+           "steps": [], "step": 0, "transcript": []}
+NAV = {"next", "back", "repeat", "goto", "seek", "show_video", "play", "pause"}
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
-    global AGENT, VAD
+    global AGENT, VAD, ASR, ROUTE
     if VAD is None:
         import warnings
 
@@ -54,9 +60,15 @@ async def lifespan(app):
 
         VAD.reset = silero.reset_states
     if AGENT is None:
+        import asr
+        import notes
+        import router
         from voice_agent import VoiceAgent
 
-        AGENT = await asyncio.to_thread(VoiceAgent)
+        await asyncio.to_thread(asr.warmup)
+        ASR, ROUTE = asr.transcribe, router.route
+        await ROUTE("hello", SESSION)  # warm Jev's connection: the first call takes ~900 ms
+        AGENT = await asyncio.to_thread(VoiceAgent, notes.SYSTEM)
     yield
 
 
@@ -68,31 +80,130 @@ async def send(ws, msg):
         await (ws.send_bytes(msg) if isinstance(msg, bytes) else ws.send_json(msg))
 
 
-async def turn(ws, pcm, cancel):
-    """One reply to one utterance, stopping early once `cancel` is set (barge-in).
-
-    Returns the seconds of audio sent (0: the browser won't report playback)."""
-    t0 = time.perf_counter()  # end of speech, as decided by the VAD
-    ms = lambda: round((time.perf_counter() - t0) * 1000)
-    metrics, samples = {}, 0
-    await send(ws, {"type": "state", "value": "thinking"})
+async def speak(ws, cancel, metrics, key, ms, **reply):
+    """Stream one voice-agent reply (audio=/note=, see VoiceAgent.reply). Returns samples sent."""
+    samples, said = 0, []
     async with MODEL_LOCK:
-        gen = AGENT.reply(audio=pcm)
+        gen = AGENT.reply(**reply)
         try:
             # one next() per thread hop, so each chunk goes out as soon as it's decoded
             while not cancel.is_set() and (item := await asyncio.to_thread(next, gen, None)) is not None:
                 if isinstance(item, str):
+                    said.append(item)
                     await send(ws, {"type": "caption", "text": item})
                     continue
-                if "voice_first_audio" not in metrics:
-                    metrics["voice_first_audio"] = ms()
+                if key not in metrics:
+                    metrics[key] = ms()
                     await send(ws, {"type": "state", "value": "speaking"})
                 await send(ws, (np.clip(item, -1, 1) * 32767).astype("<i2").tobytes())
                 samples += len(item)
         finally:
             await asyncio.to_thread(gen.close)  # keeps the turn in history even if we stopped early
+    SESSION["transcript"].append(("assistant", "".join(said)))
+    return samples
+
+
+async def show(ws, view):
+    """Send a stage view and remember it, so routing and a page refresh know what's on screen."""
+    kind = view["view"]
+    SESSION["views"][kind], SESSION["screen"] = view, kind
+    if kind == "dishes":
+        SESSION["meals"] = view["meals"]
+    elif kind == "video":
+        SESSION["video"] = view
+    elif kind == "steps":
+        SESSION["steps"], SESSION["step"] = view["steps"], 0
+    await send(ws, {"type": "view", **view})
+
+
+async def lookup(route, target, text):
+    import recommender
+    import search_agent
+
+    if route == "recommend":
+        return await recommender.recommend(text)
+    if route == "video":
+        meals = SESSION["meals"]
+        if target is not None and 0 <= target < len(meals):
+            SESSION["dish"] = meals[target]
+        dish = recommender.label(SESSION["dish"]) if SESSION["dish"] else text
+        return await search_agent.video(dish)
+    video = SESSION["video"]
+    return await search_agent.steps(video["main"]["id"], video["dish"])
+
+
+async def nav(ws, route, target):
+    """Step and video controls: screen changes only, no speech."""
+    steps, video = SESSION["steps"], SESSION["views"].get("video")
+    if route in ("next", "back", "repeat", "goto"):
+        i = {"next": SESSION["step"] + 1, "back": SESSION["step"] - 1, "repeat": SESSION["step"]}.get(route, target)
+        SESSION["step"] = max(0, min(len(steps) - 1, i or 0))
+        if SESSION["screen"] != "steps":
+            await send(ws, {"type": "view", **SESSION["views"]["steps"]})
+            SESSION["screen"] = "steps"
+        await send(ws, {"type": "control", "name": "goto_step", "index": SESSION["step"]})
+    elif route in ("seek", "show_video") and video:
+        await send(ws, {"type": "view", **video})
+        SESSION["screen"] = "video"
+        if route == "seek" and steps:
+            t = steps[SESSION["step"]].get("video_start") or 0
+            await send(ws, {"type": "control", "name": "video", "cmd": "seek", "t": t})
+    elif route in ("play", "pause"):
+        await send(ws, {"type": "control", "name": "video", "cmd": route})
+
+
+async def turn(ws, heard, cancel):
+    """One reply to one utterance (float32 pcm) or page request (dict: typed text / dish click),
+    stopping early once `cancel` is set (barge-in).
+
+    Returns the seconds of audio sent (0: the browser won't report playback)."""
+    import notes
+    import router
+
+    t0 = time.perf_counter()  # end of speech, as decided by the VAD
+    ms = lambda: round((time.perf_counter() - t0) * 1000)
+    metrics, samples = {}, 0
+    route, target, scores, audio, text = "chat", None, {}, None, ""
+    await send(ws, {"type": "state", "value": "thinking"})
+    if isinstance(heard, dict) and heard.get("name") == "select_dish":
+        route, target = "video", int(heard["id"])
+    else:
+        if isinstance(heard, dict):
+            text = heard.get("text", "")
+        else:
+            audio = heard
+            if ASR:
+                text = await asyncio.to_thread(ASR, heard)
+                metrics["asr"] = ms()
+        if text:
+            SESSION["transcript"].append(("user", text))
+            if ROUTE:
+                route, target, scores = await ROUTE(text, SESSION)
+                metrics["jev"] = ms()
+    # the voice agent hears your voice; typed text goes in as the note
+    said = {"audio": audio} if audio is not None else {"note": text}
+
+    if route in router.LOOKUPS:
+        job = asyncio.create_task(asyncio.wait_for(lookup(route, target, text), LOOKUP_TIMEOUT_S))
+        samples += await speak(ws, cancel, metrics, "voice_first_audio", ms,
+                               **(said if audio is not None else {}), note=notes.REASSURE)
+        try:
+            view = await job
+        except Exception as e:  # design §14: apologise, keep the current screen
+            view = None
+            await send(ws, {"type": "error", "text": f"lookup failed: {e}"})
+        metrics["module"] = ms()
+        if view:
+            await show(ws, view)
+        if not cancel.is_set():
+            samples += await speak(ws, cancel, metrics, "announce_first_audio", ms,
+                                   note=notes.announce(view) if view else notes.FAILED)
+    elif route in NAV:
+        await nav(ws, route, target)
+    else:
+        samples += await speak(ws, cancel, metrics, "voice_first_audio", ms, **said)
     metrics["total"] = ms()  # generation done; the browser may still be playing
-    await send(ws, {"type": "metrics", "route": "chat", "ms": metrics})
+    await send(ws, {"type": "metrics", "route": route, "target": target, "scores": scores, "ms": metrics})
     return samples / 24_000
 
 
@@ -128,9 +239,13 @@ class Listener:
                     await send(self.ws, {"type": "control", "name": "interrupt"})
                 await send(self.ws, {"type": "state", "value": "hearing"})
             if speech is not None:
-                self.busy = True
-                prev, self.cancel, self.played = self.task, asyncio.Event(), asyncio.Event()
-                self.task = asyncio.create_task(self._turn(speech, prev, self.cancel, self.played))
+                self.start(speech)
+
+    def start(self, heard):
+        """Queue a turn for an utterance (pcm) or a page request (dict)."""
+        self.busy = True
+        prev, self.cancel, self.played = self.task, asyncio.Event(), asyncio.Event()
+        self.task = asyncio.create_task(self._turn(heard, prev, self.cancel, self.played))
 
     async def _turn(self, speech, prev, cancel, played):
         if prev:  # an interrupted turn may still be winding down
@@ -160,6 +275,8 @@ async def ws_endpoint(ws: WebSocket):
         with contextlib.suppress(Exception):
             await old.close(code=4000)  # second tab takes over (design §14)
     listener = Listener(ws)
+    if view := SESSION["views"].get(SESSION["screen"]):  # page refresh: restore the stage
+        await send(ws, {"type": "view", **view})
     await listener.listen()
     try:
         while True:
@@ -170,9 +287,16 @@ async def ws_endpoint(ws: WebSocket):
                 if data and len(data) % 2 == 0 and len(data) <= MAX_FRAME_S * MIC_SR * 2:
                     await listener.frame(np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768)
             elif msg.get("text"):
-                with contextlib.suppress(ValueError):
-                    if json.loads(msg["text"]) == {"type": "playback", "value": "done"}:
+                with contextlib.suppress(ValueError, AttributeError):
+                    m = json.loads(msg["text"])
+                    if m == {"type": "playback", "value": "done"}:
                         listener.playback_done()
+                    elif m.get("type") == "text" or m.get("name") == "select_dish":
+                        listener.start(m)  # welcome chip / dish card click: a full turn
+                    elif m.get("name") == "goto_step":  # the page already switched; keep SESSION in sync
+                        SESSION["step"], SESSION["screen"] = int(m["index"]), "steps"
+                    elif m.get("name") in ("show_video", "show_steps"):
+                        SESSION["screen"] = m["name"].removeprefix("show_")
     except WebSocketDisconnect:
         pass
     finally:

@@ -23,6 +23,14 @@ const out = new AudioContext({ sampleRate: 24000 });
 const player = out.audioWorklet.addModule("worklets/player.js").then(() => {
   const node = new AudioWorkletNode(out, "pcm-player", { processorOptions: { prebuffer: PREBUFFER_S * 24000 } });
   node.connect(out.destination);
+  // orb pulses with the agent's voice: RMS of what's playing, ~0..1
+  const meter = out.createAnalyser(), buf = new Float32Array(meter.fftSize);
+  node.connect(meter);
+  (function tick() {
+    meter.getFloatTimeDomainData(buf);
+    UI.level(Math.min(1, 4 * Math.sqrt(buf.reduce((s, x) => s + x * x, 0) / buf.length)));
+    requestAnimationFrame(tick);
+  })();
   node.port.onmessage = ({ data }) => {
     if (data.type === "started") {
       firstSoundMs = Math.round(performance.now() - speechEndedAt + (out.outputLatency || 0) * 1000);
@@ -49,6 +57,7 @@ function connect() {
   ws.onmessage = (e) => {
     if (e.data instanceof ArrayBuffer) return toPlayer({ type: "buffer", buffer: e.data }, [e.data]);
     const msg = JSON.parse(e.data);
+    UI.handle(msg); // orb state, stage views, metrics strip
     if (msg.type === "state") {
       if (msg.value === "thinking") { // the VAD decided you finished: a new reply starts
         speechEndedAt = performance.now();
@@ -92,6 +101,7 @@ async function toggle() {
     mic.node.port.postMessage({ type: "stop" });
     talk.textContent = "Start";
     talk.classList.remove("on");
+    UI.handle({ type: "state", value: "idle" });
     return setStatus("");
   }
   out.resume();
@@ -108,4 +118,5 @@ async function toggle() {
 }
 
 talk.addEventListener("click", toggle);
+UI.onAction = (a) => ws.readyState === 1 && ws.send(JSON.stringify(a)); // clicks on cards/steps/chips
 connect();
