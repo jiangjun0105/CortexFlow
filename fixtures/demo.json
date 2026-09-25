@@ -1,0 +1,30 @@
+{
+  "meals": [
+    {"id": "shakshuka", "name": "Shakshuka", "image": null, "minutes": 25, "difficulty": "easy", "why": "Trending on TikTok this week"},
+    {"id": "dutch-baby", "name": "Dutch Baby", "image": null, "minutes": 30, "difficulty": "easy", "why": "Big on Instagram brunch posts"},
+    {"id": "avocado-toast", "name": "Avocado Toast", "image": null, "minutes": 10, "difficulty": "easy", "why": "Always a favourite"}
+  ],
+  "video": {
+    "view": "video",
+    "dish": "Shakshuka",
+    "main": {"id": "SjCkW-oAFQ8", "title": "Shakshuka | Basics with Babish", "minutes": 7, "thumb": "https://i.ytimg.com/vi/SjCkW-oAFQ8/hqdefault.jpg"},
+    "alternates": [
+      {"id": "urMyZ1WosYE", "title": "Easy Shakshuka Recipe | How to Make The Best Shakshuka", "minutes": 4, "thumb": "https://i.ytimg.com/vi/urMyZ1WosYE/hqdefault.jpg"},
+      {"id": "voinXU09-Ns", "title": "How to Make Shakshuka", "minutes": 4, "thumb": "https://i.ytimg.com/vi/voinXU09-Ns/hqdefault.jpg"},
+      {"id": "m5Kn9WmOCrw", "title": "Easy Amazing Shakshuka Recipe", "minutes": 9, "thumb": "https://i.ytimg.com/vi/m5Kn9WmOCrw/hqdefault.jpg"}
+    ]
+  },
+  "steps": {
+    "view": "steps",
+    "dish": "Shakshuka",
+    "video_id": "SjCkW-oAFQ8",
+    "steps": [
+      {"title": "Heat the oil", "icon": "🫒", "tags": ["medium heat", "1 min"], "detail": "Warm 2 tbsp olive oil in a wide skillet.", "video_start": 30},
+      {"title": "Soften the onion", "icon": "🧅", "tags": ["medium heat", "5 min"], "detail": "Add a diced onion and pepper. Stir until soft, not brown.", "video_start": 60},
+      {"title": "Add garlic and spices", "icon": "🧄", "tags": ["1 min", "cumin", "paprika"], "detail": "Stir in garlic, cumin and paprika until fragrant.", "video_start": 120},
+      {"title": "Simmer the tomatoes", "icon": "🍅", "tags": ["low heat", "10 min"], "detail": "Pour in crushed tomatoes. Simmer until thick.", "video_start": 170},
+      {"title": "Crack in the eggs", "icon": "🥚", "tags": ["4-6 eggs"], "detail": "Make wells in the sauce and crack an egg into each.", "video_start": 260},
+      {"title": "Cover and finish", "icon": "🌿", "tags": ["low heat", "6 min"], "detail": "Cover until the whites set. Top with herbs and feta.", "video_start": 320}
+    ]
+  }
+}

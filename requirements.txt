@@ -1,0 +1,9 @@
+liquid-audio==1.3.0
+soundfile
+fastapi
+uvicorn[standard]
+mlx-whisper
+anthropic
+yt-dlp
+httpx
+pytest
