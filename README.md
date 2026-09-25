@@ -1,5 +1,6 @@
 # CortexFlow
-
+#### Long Horizon Agents Hackathon
+---
 A single-page, voice-first recipe assistant. The interface is a single orb that listens for a spoken request, then transitions through three states as recipe data comes back from the backend.
 
 <img src="assets/image.png"/>
