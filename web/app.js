@@ -1,4 +1,5 @@
-// Slice 1: push-to-talk voice chat. Protocol: technical design §11, with PCM16 audio both ways.
+// Slice 1: hands-free voice chat. The mic streams continuously; the server runs the VAD.
+// Protocol: see server.py (technical design §11, with VAD instead of push-to-talk and PCM16 audio).
 const $ = (id) => document.getElementById(id);
 const talk = $("talk"), caption = $("caption"), status = $("status"), metrics = $("metrics");
 
@@ -7,14 +8,14 @@ const talk = $("talk"), caption = $("caption"), status = $("status"), metrics = 
 // measured over 4 replies, 30 ms -> 1 stall, 100 ms -> none. 150 ms for margin (calibration knob).
 const PREBUFFER_S = 0.15;
 
-let ws, serverBusy = false, releasedAt = 0, firstSoundMs = null, serverMs = null;
+let ws, micOn = false, speechEndedAt = 0, firstSoundMs = null, serverMs = null;
 
-function setStatus(s) { status.textContent = s; }
+function setStatus(s) { status.textContent = micOn || !ws || ws.readyState !== 1 ? s : "paused (press Start)"; }
 
 function showMetrics() {
   if (!serverMs) return;
   metrics.textContent = `server: first audio ${serverMs.voice_first_audio ?? "–"} ms · generation ${serverMs.total} ms`
-    + (firstSoundMs != null ? ` · you: release → first sound ${firstSoundMs} ms` : "");
+    + (firstSoundMs != null ? ` · end of speech → first sound ${firstSoundMs} ms (+0.5 s VAD wait before that)` : "");
 }
 
 // ---- playback: worklets/player.js queues 24 kHz PCM16 chunks and plays them back to back ----
@@ -24,9 +25,11 @@ const player = out.audioWorklet.addModule("worklets/player.js").then(() => {
   node.connect(out.destination);
   node.port.onmessage = ({ data }) => {
     if (data.type === "started") {
-      firstSoundMs = Math.round(performance.now() - releasedAt + (out.outputLatency || 0) * 1000);
+      firstSoundMs = Math.round(performance.now() - speechEndedAt + (out.outputLatency || 0) * 1000);
       showMetrics();
-    } else if (data.type === "finished") setStatus("idle");
+    } else if (data.type === "finished") {
+      ws.send(JSON.stringify({ type: "playback", value: "done" })); // server starts listening again
+    }
   };
   return node;
 });
@@ -36,27 +39,36 @@ const toPlayer = async (msg, transfer = []) => (await player).port.postMessage(m
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.binaryType = "arraybuffer";
-  ws.onopen = () => { talk.disabled = false; serverBusy = false; setStatus("idle"); };
+  ws.onopen = () => { talk.disabled = false; };
   ws.onclose = (e) => {
     talk.disabled = true;
-    if (e.code === 4000) return setStatus("opened in another tab");
-    setStatus("reconnecting…");
+    if (e.code === 4000) return (status.textContent = "opened in another tab");
+    status.textContent = "reconnecting…";
     setTimeout(connect, 1000);
   };
   ws.onmessage = (e) => {
     if (e.data instanceof ArrayBuffer) return toPlayer({ type: "buffer", buffer: e.data }, [e.data]);
     const msg = JSON.parse(e.data);
     if (msg.type === "state") {
-      serverBusy = msg.value !== "idle";
-      if (serverBusy) setStatus(msg.value);
-      else toPlayer({ type: "flush" }); // status goes idle when the player says it's finished
+      if (msg.value === "thinking") { // the VAD decided you finished: a new reply starts
+        speechEndedAt = performance.now();
+        firstSoundMs = null;
+        caption.textContent = "";
+        toPlayer({ type: "newReply" });
+      }
+      setStatus(msg.value);
     } else if (msg.type === "caption") caption.textContent += msg.text;
-    else if (msg.type === "metrics") { serverMs = msg.ms; showMetrics(); }
+    else if (msg.type === "metrics") { // generation done: play out whatever is still buffered
+      serverMs = msg.ms;
+      showMetrics();
+      toPlayer({ type: "flush" });
+    } else if (msg.type === "control" && msg.name === "interrupt") toPlayer({ type: "interrupt" }); // you talked over it
+    else if (msg.type === "error") caption.textContent = msg.text;
   };
 }
 
-// ---- push-to-talk: worklets/recorder.js captures 16 kHz PCM16 while the button/Space is held ----
-let mic = null, pieces = [], holding = false, recording = false;
+// ---- mic: worklets/recorder.js streams 16 kHz PCM16 ~100 ms chunks while the mic is on ----
+let mic = null;
 
 async function micReady() {
   if (mic) return mic;
@@ -68,58 +80,32 @@ async function micReady() {
   const node = new AudioWorkletNode(ctx, "pcm-recorder");
   ctx.createMediaStreamSource(stream).connect(node);
   node.port.onmessage = ({ data }) => {
-    if (data.type === "chunk") pieces.push(data.pcm);
-    else if (data.type === "stopped") sendUtterance();
+    if (data.type === "chunk" && micOn && ws.readyState === 1) ws.send(data.pcm.buffer);
   };
   return (mic = { ctx, node });
 }
 
-async function start() {
-  if (holding || talk.disabled || serverBusy) return; // wait for the current reply to finish generating
-  holding = true;
-  talk.classList.add("on");
-  setStatus("listening");
+async function toggle() {
+  if (talk.disabled) return;
+  if (micOn) {
+    micOn = false;
+    mic.node.port.postMessage({ type: "stop" });
+    talk.textContent = "Start";
+    talk.classList.remove("on");
+    return setStatus("");
+  }
   out.resume();
-  toPlayer({ type: "interrupt" }); // talking over the tail of the last reply stops it
   try {
     await micReady();
   } catch (err) {
-    holding = false;
-    talk.classList.remove("on");
-    return setStatus(`mic unavailable: ${err.message}`);
+    return (status.textContent = `mic unavailable: ${err.message}`);
   }
-  if (!holding) return; // released while the first mic permission prompt was open
-  pieces = [];
-  recording = true;
+  micOn = true;
   mic.node.port.postMessage({ type: "start" });
+  talk.textContent = "Stop";
+  talk.classList.add("on");
+  setStatus("listening");
 }
 
-function stop() {
-  if (!holding) return;
-  holding = false;
-  talk.classList.remove("on");
-  if (!recording) return setStatus("idle");
-  recording = false;
-  releasedAt = performance.now();
-  mic.node.port.postMessage({ type: "stop" }); // -> flushes the last chunk, then "stopped"
-}
-
-function sendUtterance() {
-  const pcm = new Int16Array(pieces.reduce((n, p) => n + p.length, 0));
-  let i = 0;
-  for (const p of pieces) { pcm.set(p, i); i += p.length; }
-  pieces = [];
-  if (pcm.length < 16000 * 0.2) return setStatus("idle (too short)");
-  caption.textContent = "";
-  firstSoundMs = null;
-  toPlayer({ type: "newReply" });
-  ws.send(pcm.buffer);
-}
-
-talk.addEventListener("pointerdown", start);
-talk.addEventListener("pointerup", stop);
-talk.addEventListener("pointerleave", stop);
-addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat) { e.preventDefault(); start(); } });
-addEventListener("keyup", (e) => { if (e.code === "Space") { e.preventDefault(); stop(); } });
-
+talk.addEventListener("click", toggle);
 connect();

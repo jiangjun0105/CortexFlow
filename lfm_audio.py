@@ -90,28 +90,53 @@ class Speaker:
         time.sleep(self.stream.latency)
 
 
-def utterance(blocks, speech_prob, start=0.5, stop=0.3, min_speech_s=0.12, end_silence_s=0.5,
-              preroll_s=0.32, max_s=10.0):
-    """First utterance in a stream of mic blocks, or None if the stream ends.
+class Endpointer:
+    """Push-based VAD state machine: feed() one 512-sample block and its speech prob at a time.
 
     Same state machine and defaults as sb_convai's VADDetector: begins after min_speech_s with
     prob >= start (keeping preroll_s before it), ends after end_silence_s with prob < stop, or at max_s.
     """
-    pre = deque(maxlen=round((preroll_s + min_speech_s) / BLOCK_S))
-    speech, loud, quiet = None, 0, 0
+
+    def __init__(self, start=0.5, stop=0.3, min_speech_s=0.12, end_silence_s=0.5, preroll_s=0.32, max_s=10.0):
+        self.start, self.stop, self.min_speech_s = start, stop, min_speech_s
+        self.end_silence_s, self.max_s = end_silence_s, max_s
+        self.pre = deque(maxlen=round((preroll_s + min_speech_s) / BLOCK_S))
+        self.reset()
+
+    def reset(self):
+        self.pre.clear()
+        self.speech, self.loud, self.quiet = None, 0, 0
+
+    @property
+    def speaking(self):
+        return self.speech is not None
+
+    def feed(self, block, prob):
+        """Returns the whole utterance (float32 16kHz) on the block that ends it, else None."""
+        if self.speech is None:
+            self.pre.append(block)
+            self.loud = self.loud + 1 if prob >= self.start else 0
+            if self.loud * BLOCK_S >= self.min_speech_s:
+                self.speech = list(self.pre)
+            return None
+        self.speech.append(block)
+        self.quiet = 0 if prob >= self.stop else self.quiet + 1
+        if self.quiet * BLOCK_S >= self.end_silence_s or len(self.speech) * BLOCK_S >= self.max_s:
+            speech = np.concatenate(self.speech)
+            self.reset()
+            return speech
+        return None
+
+
+def utterance(blocks, speech_prob, **endpointer_kw):
+    """First utterance in a stream of mic blocks, or None if the stream ends (pull-style Endpointer)."""
+    ep = Endpointer(**endpointer_kw)
     for b in blocks:
-        p = speech_prob(b)
-        if speech is None:
-            pre.append(b)
-            loud = loud + 1 if p >= start else 0
-            if loud * BLOCK_S >= min_speech_s:
-                speech = list(pre)
-                print("(hearing you...)", flush=True)
-        else:
-            speech.append(b)
-            quiet = 0 if p >= stop else quiet + 1
-            if quiet * BLOCK_S >= end_silence_s or len(speech) * BLOCK_S >= max_s:
-                return np.concatenate(speech)
+        was_speaking = ep.speaking
+        if (speech := ep.feed(b, speech_prob(b))) is not None:
+            return speech
+        if ep.speaking and not was_speaking:
+            print("(hearing you...)", flush=True)
     return None
 
 
