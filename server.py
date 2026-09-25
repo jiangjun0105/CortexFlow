@@ -17,6 +17,7 @@ playback, generation stops, and the new utterance becomes the next turn).
 import asyncio
 import contextlib
 import json
+import os
 import time
 
 import numpy as np
@@ -31,7 +32,8 @@ MAX_FRAME_S = 1  # one mic frame; the browser sends ~0.1 s
 HALF_DUPLEX = True  # the browser echo cancellation let the agent hear itself and barge in on its own replies
 AGENT = None  # VoiceAgent, loaded at startup; tests set a fake before starting the app
 VAD = None  # block (float32, 512 samples) -> speech prob; silero at startup, tests set a fake
-ASR = None  # pcm -> text (mlx-whisper), loaded with the real agent; None: every turn is plain chat
+SMART = os.environ.get("SMART") == "1"  # SMART=1: load ASR + Jev router + lookups; off: voice agent only
+ASR = None  # pcm -> text (mlx-whisper), loaded when SMART; None: every turn is plain chat
 ROUTE = None  # async (text, session) -> (route, target, scores): the Jev router
 LOOKUP_TIMEOUT_S = 45  # a cold recommend is ~29 s (3 Nimble search+scrape); cached after that
 MODEL_LOCK = asyncio.Lock()
@@ -60,19 +62,39 @@ async def lifespan(app):
 
         VAD.reset = silero.reset_states
     if AGENT is None:
-        import asr
-        import notes
-        import router
         from voice_agent import VoiceAgent
 
-        await asyncio.to_thread(asr.warmup)
-        ASR, ROUTE = asr.transcribe, router.route
-        await ROUTE("hello", SESSION)  # warm Jev's connection: the first call takes ~900 ms
-        AGENT = await asyncio.to_thread(VoiceAgent, notes.SYSTEM)
+        if SMART:
+            import asr
+            import notes
+            import router
+
+            await asyncio.to_thread(asr.warmup)
+            ASR, ROUTE = asr.transcribe, router.route
+            await ROUTE("hello", SESSION)  # warm Jev's connection: the first call takes ~900 ms
+            AGENT = await asyncio.to_thread(VoiceAgent, notes.SYSTEM)
+        else:  # plain voice agent, exactly as before the wiring
+            AGENT = await asyncio.to_thread(VoiceAgent)
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+HEALTH = {"started": time.time(), "turns": 0, "errors": 0, "last_error": None, "last_turn": None, "turn_started": None}
+STUCK_S = 60  # a turn running longer than this is reported as stuck
+
+
+@app.get("/health")
+def health():
+    """Is the local model loaded and answering? Poll: while sleep 2; do curl -s localhost:8000/health; echo; done"""
+    import resource
+
+    running = time.time() - HEALTH["turn_started"] if HEALTH["turn_started"] else 0
+    ok = AGENT is not None and running < STUCK_S
+    return {"ok": ok, "status": "stuck" if running >= STUCK_S else "busy" if running else "idle" if AGENT else "loading",
+            "smart": SMART, "connected": SESSION["ws"] is not None, "turn_running_s": round(running, 1),
+            "uptime_s": round(time.time() - HEALTH["started"]), "turns": HEALTH["turns"], "errors": HEALTH["errors"],
+            "last_error": HEALTH["last_error"], "last_turn": HEALTH["last_turn"],
+            "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 2**20}  # macOS: bytes
 
 
 async def send(ws, msg):
@@ -203,6 +225,7 @@ async def turn(ws, heard, cancel):
     else:
         samples += await speak(ws, cancel, metrics, "voice_first_audio", ms, **said)
     metrics["total"] = ms()  # generation done; the browser may still be playing
+    HEALTH["last_turn"] = {"at": time.strftime("%H:%M:%S"), "route": route, "ms": metrics, "audio_s": round(samples / 24_000, 1)}
     await send(ws, {"type": "metrics", "route": route, "target": target, "scores": scores, "ms": metrics})
     return samples / 24_000
 
@@ -250,11 +273,17 @@ class Listener:
     async def _turn(self, speech, prev, cancel, played):
         if prev:  # an interrupted turn may still be winding down
             await prev
+        HEALTH["turn_started"] = time.time()
         try:
             secs = await turn(self.ws, speech, cancel)
+            HEALTH["turns"] += 1
         except Exception as e:  # design §14: report, then carry on with the next turn
+            HEALTH["errors"] += 1
+            HEALTH["last_error"] = f"{time.strftime('%H:%M:%S')} {type(e).__name__}: {e}"
             await send(self.ws, {"type": "error", "text": f"voice agent failed: {e}"})
             secs = 0
+        finally:
+            HEALTH["turn_started"] = None
         if secs and not cancel.is_set():  # wait for playback; the timeout covers a closed/hidden tab
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(played.wait(), secs + 5)
