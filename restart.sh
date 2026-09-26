@@ -2,6 +2,8 @@
 # Restart the breakfast agent: one process serves both the backend (/ws, /health) and the page (web/).
 #   ./restart.sh                 ASR + Jev on, kitchen prompt off (the known-good setup)
 #   ASR=0 JEV=0 ./restart.sh     voice agent only
+#   WEB_CACHE=0 ./restart.sh     always call the real web agent (Nimble), no cached results
+#   TEXT_HISTORY=1 ./restart.sh  past turns as text, only the current utterance as audio
 #   KITCHEN=0 ./restart.sh       LFM's default prompt instead of ours (notes.SYSTEM)
 # Log: /tmp/breakfast-server.log
 cd "$(dirname "$0")"
@@ -11,7 +13,7 @@ pkill -f "python server.py" && echo "stopped old server"
 while pgrep -f "python server.py" >/dev/null; do sleep 0.5; done
 
 ASR=${ASR:-1} JEV=${JEV:-1} KITCHEN=${KITCHEN:-1} nohup .venv/bin/python server.py >"$LOG" 2>&1 &
-echo "starting (ASR=${ASR:-1} JEV=${JEV:-1} KITCHEN=${KITCHEN:-1}), log: $LOG"
+echo "starting (ASR=${ASR:-1} JEV=${JEV:-1} KITCHEN=${KITCHEN:-1} TEXT_HISTORY=${TEXT_HISTORY:-0} WEB_CACHE=${WEB_CACHE:-1}), log: $LOG"
 
 for _ in $(seq 1 100); do  # model load takes ~20 s
   if curl -sf localhost:8000/health >/dev/null; then

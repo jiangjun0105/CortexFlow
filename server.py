@@ -112,7 +112,7 @@ def health():
     running = time.time() - HEALTH["turn_started"] if HEALTH["turn_started"] else 0
     ok = AGENT is not None and running < STUCK_S
     return {"ok": ok, "status": "stuck" if running >= STUCK_S else "busy" if running else "idle" if AGENT else "loading",
-            "asr": USE_ASR, "jev": USE_JEV, "kitchen_prompt": KITCHEN_PROMPT, "text_history": TEXT_HISTORY, "connected": SESSION["ws"] is not None, "turn_running_s": round(running, 1),
+            "asr": USE_ASR, "jev": USE_JEV, "kitchen_prompt": KITCHEN_PROMPT, "text_history": TEXT_HISTORY, "web_cache": os.environ.get("WEB_CACHE", "1") == "1", "connected": SESSION["ws"] is not None, "turn_running_s": round(running, 1),
             "uptime_s": round(time.time() - HEALTH["started"]), "turns": HEALTH["turns"], "errors": HEALTH["errors"],
             "last_error": HEALTH["last_error"], "last_turn": HEALTH["last_turn"],
             "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 2**20}  # macOS: bytes

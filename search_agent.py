@@ -2,6 +2,7 @@
 import asyncio
 import functools
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -19,13 +20,17 @@ def web():
     return web_agent
 
 
+# WEB_CACHE=0: always call the real web agent (Nimble); results still refresh the cache for later cached runs
+USE_CACHE = os.environ.get("WEB_CACHE", "1") == "1"
+
+
 def cached(fn):
     """JSON cache at cache/<fn>-<slug>.json keyed on the first arg; only successes are stored."""
     @functools.wraps(fn)
     async def wrapper(arg, *rest):
         slug = re.sub(r"[^a-z0-9]+", "-", arg.lower()).strip("-")[:80] or "empty"
         path = CACHE / f"{fn.__name__}-{slug}.json"
-        if path.exists():
+        if USE_CACHE and path.exists():
             return json.loads(path.read_text())
         result = await fn(arg, *rest)
         CACHE.mkdir(exist_ok=True)
@@ -61,7 +66,7 @@ def adapt_video(raw: dict, dish: str) -> dict:
         except (ValueError, KeyError):
             pass
     if not title:
-        title = re.split(r"(?<=[.!?])\s", desc, maxsplit=1)[0][:60] or dish
+        title = f"{dish} cooking video"  # YouTube descriptions often open with ingredient lists, not a title
     return {
         "view": "video",
         "dish": dish,
