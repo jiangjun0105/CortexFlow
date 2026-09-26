@@ -96,6 +96,17 @@ HEALTH = {"started": time.time(), "turns": 0, "errors": 0, "last_error": None, "
 STUCK_S = 60  # a turn running longer than this is reported as stuck
 
 
+@app.post("/recommendations")
+async def recommendations(payload: dict):
+    """Receives send_recs.py's RawTree top-3 breakfast trends; the next dish-card lookup uses them."""
+    import recommender
+
+    try:
+        return {"ok": True, "dishes": recommender.save_push(payload)}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/turns")
 def turns(n: int = 10):
     """The last n turns: what ASR heard, Jev's route, and each note sent to the model with its reply."""
