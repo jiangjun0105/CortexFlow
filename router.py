@@ -18,9 +18,11 @@ QUESTIONS = {
     "recommend": ("Does the user want breakfast or meal ideas, suggestions, or what's popular?",
                   "The latest message asks for dish ideas, recommendations, or what's popular/trending to cook."),
     "video": ("Does the user want to see how to cook a specific dish (choosing one on screen or naming one)?",
-              "The latest message picks a dish (e.g. 'let's do X', 'the second one', 'that one looks good') or asks how to make a named dish."),
+              "The latest message picks a dish (e.g. 'let's do X', 'the second one', 'that one looks good') or asks how to make a named dish, "
+              "and that dish's video is not already on screen (on the video screen, 'how do I make it' means steps, not video)."),
     "steps": ("Does the user find the video or recipe hard to follow and want it broken into steps?",
-              "The latest message says the video/recipe is confusing, too fast, or hard to follow, or asks for step-by-step instructions, "
+              "The latest message says the video/recipe is confusing, too fast, or hard to follow, asks for step-by-step instructions, "
+              "or, while the video is on screen, asks how to make or cook it, "
               "and the step cards are not already on screen (screen is not 'steps')."),
     "next": ("Does the user want to move to the next step?",
              "The latest message asks to go forward to the next step ('next', 'okay next', 'done, what now')."),

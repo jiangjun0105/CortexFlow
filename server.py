@@ -37,6 +37,8 @@ _on = lambda k, default: os.environ.get(k, default) == "1"
 USE_ASR, USE_JEV, KITCHEN_PROMPT = _on("ASR", "1"), _on("JEV", "1"), _on("KITCHEN", "1")
 TEXT_HISTORY = _on("TEXT_HISTORY", "0")  # 1: rebuild LFM context from transcripts, only the current turn as audio
 SAVE_AUDIO = _on("SAVE_AUDIO", "1")  # save each utterance to voice_debug/live_turnN.wav (tests turn it off)
+HISTORY_TURNS = 6  # text-history window; 12 let off-topic chat leak into replies for 5+ turns
+MAX_UTTERANCE_S = 20  # the VAD cut long requests off at its 10 s default
 TURN_LOG = []  # the model calls of the turn in progress, written to cache/turns.jsonl when it ends
 ASR = None  # pcm -> text (mlx-whisper), loaded when USE_ASR; None: every turn is plain chat
 ROUTE = None  # async (text, session) -> (route, target, scores): the Jev router
@@ -128,7 +130,7 @@ async def speak(ws, cancel, metrics, key, ms, **reply):
             hist = SESSION["transcript"]
             if reply.get("audio") is not None and hist and hist[-1][0] == "user":
                 hist = hist[:-1]  # that's the current utterance, which goes in as audio
-            await asyncio.to_thread(AGENT.set_history, hist[-12:])
+            await asyncio.to_thread(AGENT.set_history, hist[-HISTORY_TURNS:])
         ctx = screen_context()
         if ctx and (TEXT_HISTORY or ctx != SESSION.get("screen_told")):  # tell the model what's on screen, before the user's input
             AGENT.add_system(ctx)
@@ -259,7 +261,13 @@ async def turn(ws, heard, cancel):
         meals = SESSION["meals"]
         meal = meals[target] if route == "video" and target is not None and 0 <= target < len(meals) else SESSION["dish"]
         dish = notes.label(meal) if route == "video" and meal else None
-        job = asyncio.create_task(asyncio.wait_for(lookup(route, target, text), LOOKUP_TIMEOUT_S))
+        async def fetch():  # the view goes out as soon as the lookup returns, even mid-reassure
+            view = await asyncio.wait_for(lookup(route, target, text), LOOKUP_TIMEOUT_S)
+            metrics["module"] = ms()
+            await show(ws, view)
+            return view
+
+        job = asyncio.create_task(fetch())
         samples += await speak(ws, cancel, metrics, "voice_first_audio", ms,
                                **(said if audio is not None else {}), note=notes.reassure(route, dish))
         try:
@@ -267,9 +275,6 @@ async def turn(ws, heard, cancel):
         except Exception as e:  # design §14: apologise, keep the current screen
             view = None
             await send(ws, {"type": "error", "text": f"lookup failed: {e}"})
-        metrics["module"] = ms()
-        if view:
-            await show(ws, view)
         if not cancel.is_set():
             samples += await speak(ws, cancel, metrics, "announce_first_audio", ms,
                                    note=notes.announce(view) if view else notes.FAILED)
@@ -304,7 +309,7 @@ class Listener:
     """Per-connection VAD: mic frames in, turns out. Speech during a reply interrupts it."""
 
     def __init__(self, ws):
-        self.ws, self.ep, self.residual = ws, Endpointer(), np.zeros(0, np.float32)
+        self.ws, self.ep, self.residual = ws, Endpointer(max_s=MAX_UTTERANCE_S), np.zeros(0, np.float32)
         self.busy, self.task, self.played, self.cancel = False, None, asyncio.Event(), asyncio.Event()
 
     async def listen(self):

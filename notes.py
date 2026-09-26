@@ -18,7 +18,7 @@ def label(meal):
 # Notes tell the model what is happening, not what to say; it replies in its own words.
 def reassure(route, dish=None):
     """Status when Jev triggers a lookup, while the web agent works."""
-    what = {"recommend": "trending breakfasts online",
+    what = {"recommend": "trending breakfasts",
             "video": f"a cooking video for {dish}" if dish else "a cooking video online",
             "steps": "step-by-step cards for this recipe"}[route]
     return f"[Status: now searching online for {what}. The results will appear on the screen in a few seconds.]"
