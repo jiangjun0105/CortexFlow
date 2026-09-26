@@ -9,7 +9,8 @@ import torch
 import torchaudio
 
 from lfm_audio import ChatState
-from notes import REASSURE, SYSTEM, announce
+from notes import SYSTEM, announce, reassure
+REASSURE = reassure("recommend")
 from voice_agent import VoiceAgent
 
 wav, sr = sf.read("question.wav", dtype="float32", always_2d=True)
