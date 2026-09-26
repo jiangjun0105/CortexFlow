@@ -38,6 +38,7 @@ USE_ASR, USE_JEV, KITCHEN_PROMPT = _on("ASR", "1"), _on("JEV", "1"), _on("KITCHE
 TEXT_HISTORY = _on("TEXT_HISTORY", "0")  # 1: rebuild LFM context from transcripts, only the current turn as audio
 SAVE_AUDIO = _on("SAVE_AUDIO", "1")  # save each utterance to voice_debug/live_turnN.wav (tests turn it off)
 HISTORY_TURNS = 6  # text-history window; 12 let off-topic chat leak into replies for 5+ turns
+FAST_LOOKUP_S = 1.0  # a lookup back within this skips the reassure reply
 MAX_UTTERANCE_S = 20  # the VAD cut long requests off at its 10 s default
 TURN_LOG = []  # the model calls of the turn in progress, written to cache/turns.jsonl when it ends
 ASR = None  # pcm -> text (mlx-whisper), loaded when USE_ASR; None: every turn is plain chat
@@ -268,16 +269,21 @@ async def turn(ws, heard, cancel):
             return view
 
         job = asyncio.create_task(fetch())
-        samples += await speak(ws, cancel, metrics, "voice_first_audio", ms,
-                               **(said if audio is not None else {}), note=notes.reassure(route, dish))
+        # cached lookups return in ms: then skip "searching..." and answer once with the results on screen
+        # (a reassure after the cards were already up made LFM invent other dishes for 11 s)
+        fast, _ = await asyncio.wait({job}, timeout=FAST_LOOKUP_S)
+        if not fast:
+            samples += await speak(ws, cancel, metrics, "voice_first_audio", ms,
+                                   **(said if audio is not None else {}), note=notes.reassure(route, dish))
         try:
             view = await job
         except Exception as e:  # design §14: apologise, keep the current screen
             view = None
             await send(ws, {"type": "error", "text": f"lookup failed: {e}"})
         if not cancel.is_set():
-            samples += await speak(ws, cancel, metrics, "announce_first_audio", ms,
-                                   note=notes.announce(view) if view else notes.FAILED)
+            heard = {"audio": audio} if fast and audio is not None else {}  # not yet answered: it hears the user
+            samples += await speak(ws, cancel, metrics, "voice_first_audio" if fast else "announce_first_audio", ms,
+                                   **heard, note=notes.announce(view) if view else notes.FAILED)
     elif route in NAV:
         await nav(ws, route, target)
     else:

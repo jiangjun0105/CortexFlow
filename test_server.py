@@ -105,7 +105,7 @@ with TestClient(server.app) as client, client.websocket_connect("/ws") as ws:
         msgs.append(m["bytes"] if m.get("bytes") is not None else json.loads(m["text"]))
     views = [m for m in msgs if isinstance(m, dict) and m["type"] == "view"]
     assert [v["view"] for v in views] == ["dishes"], kinds(msgs)
-    assert fake.notes[-2:] == [notes.reassure("recommend"), notes.announce(views[0])], fake.notes  # reassure, then announce
+    assert fake.notes[-1:] == [notes.announce(views[0])], fake.notes  # instant lookup: no reassure, one reply with the results
     assert msgs[-1]["route"] == "recommend" and {"asr", "jev", "module"} <= msgs[-1]["ms"].keys()
     assert server.SESSION["screen"] == "dishes" and server.SESSION["meals"][0]["name"] == "French toast"
     ws.send_text(DONE)
