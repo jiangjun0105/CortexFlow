@@ -43,6 +43,7 @@ kinds = lambda msgs: [m["type"] + ":" + str(m.get("value", "")) if isinstance(m,
 LISTENING = {"type": "state", "value": "listening"}
 DONE = json.dumps({"type": "playback", "value": "done"})
 
+server.SAVE_AUDIO = False  # don't overwrite real captures in voice_debug/
 server.HALF_DUPLEX = True  # the mic-ignored-while-speaking path below assumes half duplex
 server.AGENT = fake = FakeAgent()
 server.VAD = lambda block: float(np.abs(block).max() > 0.05)  # loud = speech

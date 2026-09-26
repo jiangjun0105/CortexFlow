@@ -17,11 +17,21 @@ class VoiceAgent:
         with torch.no_grad(), self.mimi.streaming(1):  # warm up, the first decode takes ~2.4s on mps
             for _ in range(5):
                 self.mimi.decode(torch.randint(2048, (1, 8, 1), device=DEVICE))
+        self.system = system
+        self.set_history([])
+        self.marks, self.last_text = {}, ""
+
+    def set_history(self, turns):
+        """Replace the conversation with text-only turns [(role, text)]: no past audio in the context."""
         self.chat = ChatState(self.processor)
         self.chat.new_turn("system")
-        self.chat.add_text(system)
+        self.chat.add_text(self.system)
         self.chat.end_turn()
-        self.marks, self.last_text = {}, ""
+        for role, text in turns:
+            if text:
+                self.chat.new_turn(role)
+                self.chat.add_text(text)
+                self.chat.end_turn()
 
     @torch.no_grad()
     def reply(self, audio=None, note=None):

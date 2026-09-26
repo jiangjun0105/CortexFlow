@@ -35,6 +35,9 @@ VAD = None  # block (float32, 512 samples) -> speech prob; silero at startup, te
 # per-component switches (1 = on, 0 = off). Default: ASR + Jev on, kitchen prompt off (it made LFM echo the user).
 _on = lambda k, default: os.environ.get(k, default) == "1"
 USE_ASR, USE_JEV, KITCHEN_PROMPT = _on("ASR", "1"), _on("JEV", "1"), _on("KITCHEN", "0")
+TEXT_HISTORY = _on("TEXT_HISTORY", "0")  # 1: rebuild LFM context from transcripts, only the current turn as audio
+SAVE_AUDIO = _on("SAVE_AUDIO", "1")  # save each utterance to voice_debug/live_turnN.wav (tests turn it off)
+TURN_LOG = []  # the model calls of the turn in progress, written to cache/turns.jsonl when it ends
 ASR = None  # pcm -> text (mlx-whisper), loaded when USE_ASR; None: every turn is plain chat
 ROUTE = None  # async (text, session) -> (route, target, scores): the Jev router
 LOOKUP_TIMEOUT_S = 45  # a cold recommend is ~29 s (3 Nimble search+scrape); cached after that
@@ -90,6 +93,14 @@ HEALTH = {"started": time.time(), "turns": 0, "errors": 0, "last_error": None, "
 STUCK_S = 60  # a turn running longer than this is reported as stuck
 
 
+@app.get("/turns")
+def turns(n: int = 10):
+    """The last n turns: what ASR heard, Jev's route, and each note sent to the model with its reply."""
+    with contextlib.suppress(FileNotFoundError), open("cache/turns.jsonl") as f:
+        return [json.loads(line) for line in f.readlines()[-n:]]
+    return []
+
+
 @app.get("/health")
 def health():
     """Is the local model loaded and answering? Poll: while sleep 2; do curl -s localhost:8000/health; echo; done"""
@@ -98,7 +109,7 @@ def health():
     running = time.time() - HEALTH["turn_started"] if HEALTH["turn_started"] else 0
     ok = AGENT is not None and running < STUCK_S
     return {"ok": ok, "status": "stuck" if running >= STUCK_S else "busy" if running else "idle" if AGENT else "loading",
-            "asr": USE_ASR, "jev": USE_JEV, "kitchen_prompt": KITCHEN_PROMPT, "connected": SESSION["ws"] is not None, "turn_running_s": round(running, 1),
+            "asr": USE_ASR, "jev": USE_JEV, "kitchen_prompt": KITCHEN_PROMPT, "text_history": TEXT_HISTORY, "connected": SESSION["ws"] is not None, "turn_running_s": round(running, 1),
             "uptime_s": round(time.time() - HEALTH["started"]), "turns": HEALTH["turns"], "errors": HEALTH["errors"],
             "last_error": HEALTH["last_error"], "last_turn": HEALTH["last_turn"],
             "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 2**20}  # macOS: bytes
@@ -113,6 +124,11 @@ async def speak(ws, cancel, metrics, key, ms, **reply):
     """Stream one voice-agent reply (audio=/note=, see VoiceAgent.reply). Returns samples sent."""
     samples, said = 0, []
     async with MODEL_LOCK:
+        if TEXT_HISTORY:  # past turns as text; only this turn's audio goes in as audio
+            hist = SESSION["transcript"]
+            if reply.get("audio") is not None and hist and hist[-1][0] == "user":
+                hist = hist[:-1]  # that's the current utterance, which goes in as audio
+            await asyncio.to_thread(AGENT.set_history, hist[-12:])
         gen = AGENT.reply(**reply)
         try:
             # one next() per thread hop, so each chunk goes out as soon as it's decoded
@@ -129,6 +145,8 @@ async def speak(ws, cancel, metrics, key, ms, **reply):
         finally:
             await asyncio.to_thread(gen.close)  # keeps the turn in history even if we stopped early
     SESSION["transcript"].append(("assistant", "".join(said)))
+    TURN_LOG.append({"kind": key, "with_audio": reply.get("audio") is not None, "note": reply.get("note"),
+                     "said": "".join(said)})
     return samples
 
 
@@ -190,6 +208,7 @@ async def turn(ws, heard, cancel):
     import router
 
     t0 = time.perf_counter()  # end of speech, as decided by the VAD
+    TURN_LOG.clear()
     ms = lambda: round((time.perf_counter() - t0) * 1000)
     metrics, samples = {}, 0
     route, target, scores, audio, text = "chat", None, {}, None, ""
@@ -236,7 +255,13 @@ async def turn(ws, heard, cancel):
     HEALTH["last_turn"] = {"at": time.strftime("%H:%M:%S"), "route": route, "ms": metrics, "audio_s": round(samples / 24_000, 1),
                            "heard_s": round(len(audio) / MIC_SR, 1) if audio is not None else None,
                            "heard": text, "said": said_text}
-    if audio is not None:  # debug: exactly what the server got from the browser mic
+    top = dict(sorted(scores.items(), key=lambda kv: -kv[1])[:3])
+    entry = {**HEALTH["last_turn"], "target": target, "top_scores": top, "text_history": TEXT_HISTORY,
+             "model_calls": list(TURN_LOG)}
+    os.makedirs("cache", exist_ok=True)
+    with open("cache/turns.jsonl", "a") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    if audio is not None and SAVE_AUDIO:  # debug: exactly what the server got from the browser mic
         import soundfile as sf
 
         os.makedirs("voice_debug", exist_ok=True)

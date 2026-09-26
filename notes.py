@@ -19,14 +19,18 @@ def label(meal):
 
 
 def announce(view):
+    """What the screen now shows, and what one sentence to say about it: the ask differs per screen."""
     kind = view["view"]
     if kind == "dishes":
         summary = f"{len(view['meals'])} breakfasts: " + "; ".join(label(m) for m in view["meals"])
+        ask = "ask which one they'd like to make"
     elif kind == "video":
         main = view["main"]
         summary = (f"a {main['minutes']}-minute video: " if main.get("minutes") else "a video: ") + main["title"]
+        ask = "say the video is playing, and they can ask for step-by-step cards if it's hard to follow"
     elif kind == "steps":
         summary = f"{len(view['steps'])} steps; step 1 is {view['steps'][0]['title']}"
+        ask = "say step 1 out loud, and that they can say 'next' when ready"
     else:
         raise ValueError(kind)
-    return f"[The screen now shows: {summary.rstrip(".")}. Tell them in one sentence and invite them to pick or continue.]"
+    return f"[The screen now shows {summary.rstrip('.')}. In one sentence, {ask}.]"
