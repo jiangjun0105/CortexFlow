@@ -53,7 +53,7 @@
   }
   function restart() {
     i = 0; auto = false;
-    $("caption").textContent = ""; $("status").textContent = "mock"; $("metrics").textContent = "";
+    $("caption").textContent = ""; $("status").textContent = "mock";
     send({ type: "state", value: "idle" });
     send({ type: "view", view: "welcome" });
   }
