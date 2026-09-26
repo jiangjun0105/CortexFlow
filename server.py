@@ -1,4 +1,4 @@
-"""Breakfast voice agent backend, slice 1: hands-free voice chat (no ASR / router / search yet).
+"""Breakfast voice agent backend: hands-free voice chat + ASR -> Jev router -> web agent lookups -> stage views.
 
   .venv/bin/python server.py      then open http://localhost:8000
 
@@ -17,6 +17,7 @@ playback, generation stops, and the new utterance becomes the next turn).
 import asyncio
 import contextlib
 import json
+import os
 import time
 
 import numpy as np
@@ -28,16 +29,31 @@ from lfm_audio import BLOCK, MIC_SR, Endpointer
 MAX_FRAME_S = 1  # one mic frame; the browser sends ~0.1 s
 # True: drop the mic while the agent thinks/speaks (no barge-in). Flip it if the agent's own voice
 # leaks past the browser's echo cancellation and it keeps interrupting itself.
-HALF_DUPLEX = False
+HALF_DUPLEX = True  # the browser echo cancellation let the agent hear itself and barge in on its own replies
 AGENT = None  # VoiceAgent, loaded at startup; tests set a fake before starting the app
 VAD = None  # block (float32, 512 samples) -> speech prob; silero at startup, tests set a fake
+# per-component switches (1 = on, 0 = off). KITCHEN = our system prompt (notes.SYSTEM) instead of LFM's default.
+_on = lambda k, default: os.environ.get(k, default) == "1"
+USE_ASR, USE_JEV, KITCHEN_PROMPT = _on("ASR", "1"), _on("JEV", "1"), _on("KITCHEN", "1")
+TEXT_HISTORY = _on("TEXT_HISTORY", "0")  # 1: rebuild LFM context from transcripts, only the current turn as audio
+SAVE_AUDIO = _on("SAVE_AUDIO", "1")  # save each utterance to voice_debug/live_turnN.wav (tests turn it off)
+HISTORY_TURNS = 6  # text-history window; 12 let off-topic chat leak into replies for 5+ turns
+FAST_LOOKUP_S = 1.0  # a lookup back within this skips the reassure reply
+MAX_UTTERANCE_S = 20  # the VAD cut long requests off at its 10 s default
+TURN_LOG = []  # the model calls of the turn in progress, written to cache/turns.jsonl when it ends
+ASR = None  # pcm -> text (mlx-whisper), loaded when USE_ASR; None: every turn is plain chat
+ROUTE = None  # async (text, session) -> (route, target, scores): the Jev router
+LOOKUP_TIMEOUT_S = 45  # a cold recommend is ~29 s (3 Nimble search+scrape); cached after that
 MODEL_LOCK = asyncio.Lock()
-SESSION = {"ws": None}  # single session (design §1): a new connection replaces the old one
+# single session (design §1): a new connection replaces the old one
+SESSION = {"ws": None, "screen": "welcome", "views": {}, "meals": [], "dish": None, "video": None,
+           "steps": [], "step": 0, "transcript": []}
+NAV = {"next", "back", "repeat", "goto", "seek", "show_video", "play", "pause"}
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
-    global AGENT, VAD
+    global AGENT, VAD, ASR, ROUTE
     if VAD is None:
         import warnings
 
@@ -56,11 +72,50 @@ async def lifespan(app):
     if AGENT is None:
         from voice_agent import VoiceAgent
 
-        AGENT = await asyncio.to_thread(VoiceAgent)
+        if USE_ASR:
+            import asr
+
+            await asyncio.to_thread(asr.warmup)
+            ASR = asr.transcribe
+        if USE_JEV:  # needs ASR text; without ASR it never runs
+            import router
+
+            ROUTE = router.route
+            await ROUTE("hello", SESSION)  # warm Jev's connection: the first call takes ~900 ms
+        if KITCHEN_PROMPT:
+            import notes
+
+            AGENT = await asyncio.to_thread(VoiceAgent, notes.SYSTEM)
+        else:  # LFM's default prompt, as before the wiring
+            AGENT = await asyncio.to_thread(VoiceAgent)
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+HEALTH = {"started": time.time(), "turns": 0, "errors": 0, "last_error": None, "last_turn": None, "turn_started": None}
+STUCK_S = 60  # a turn running longer than this is reported as stuck
+
+
+@app.get("/turns")
+def turns(n: int = 10):
+    """The last n turns: what ASR heard, Jev's route, and each note sent to the model with its reply."""
+    with contextlib.suppress(FileNotFoundError), open("cache/turns.jsonl") as f:
+        return [json.loads(line) for line in f.readlines()[-n:]]
+    return []
+
+
+@app.get("/health")
+def health():
+    """Is the local model loaded and answering? Poll: while sleep 2; do curl -s localhost:8000/health; echo; done"""
+    import resource
+
+    running = time.time() - HEALTH["turn_started"] if HEALTH["turn_started"] else 0
+    ok = AGENT is not None and running < STUCK_S
+    return {"ok": ok, "status": "stuck" if running >= STUCK_S else "busy" if running else "idle" if AGENT else "loading",
+            "asr": USE_ASR, "jev": USE_JEV, "kitchen_prompt": KITCHEN_PROMPT, "text_history": TEXT_HISTORY, "web_cache": os.environ.get("WEB_CACHE", "1") == "1", "connected": SESSION["ws"] is not None, "turn_running_s": round(running, 1),
+            "uptime_s": round(time.time() - HEALTH["started"]), "turns": HEALTH["turns"], "errors": HEALTH["errors"],
+            "last_error": HEALTH["last_error"], "last_turn": HEALTH["last_turn"],
+            "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 2**20}  # macOS: bytes
 
 
 async def send(ws, msg):
@@ -68,31 +123,193 @@ async def send(ws, msg):
         await (ws.send_bytes(msg) if isinstance(msg, bytes) else ws.send_json(msg))
 
 
-async def turn(ws, pcm, cancel):
-    """One reply to one utterance, stopping early once `cancel` is set (barge-in).
-
-    Returns the seconds of audio sent (0: the browser won't report playback)."""
-    t0 = time.perf_counter()  # end of speech, as decided by the VAD
-    ms = lambda: round((time.perf_counter() - t0) * 1000)
-    metrics, samples = {}, 0
-    await send(ws, {"type": "state", "value": "thinking"})
+async def speak(ws, cancel, metrics, key, ms, hide_request=False, **reply):
+    """Stream one voice-agent reply (audio=/note=, see VoiceAgent.reply). Returns samples sent."""
+    samples, said = 0, []
     async with MODEL_LOCK:
-        gen = AGENT.reply(audio=pcm)
+        if TEXT_HISTORY:  # past turns as text; only this turn's audio goes in as audio
+            hist = SESSION["transcript"]
+            if (reply.get("audio") is not None or hide_request) and hist and hist[-1][0] == "user":
+                hist = hist[:-1]  # the current utterance: it goes in as audio, or is hidden (reassure)
+            await asyncio.to_thread(AGENT.set_history, hist[-HISTORY_TURNS:])
+        ctx = screen_context()
+        if ctx and (TEXT_HISTORY or ctx != SESSION.get("screen_told")):  # tell the model what's on screen, before the user's input
+            AGENT.add_system(ctx)
+            SESSION["screen_told"] = ctx
+        gen = AGENT.reply(**reply)
         try:
             # one next() per thread hop, so each chunk goes out as soon as it's decoded
             while not cancel.is_set() and (item := await asyncio.to_thread(next, gen, None)) is not None:
                 if isinstance(item, str):
+                    said.append(item)
                     await send(ws, {"type": "caption", "text": item})
                     continue
-                if "voice_first_audio" not in metrics:
-                    metrics["voice_first_audio"] = ms()
+                if key not in metrics:
+                    metrics[key] = ms()
                     await send(ws, {"type": "state", "value": "speaking"})
                 await send(ws, (np.clip(item, -1, 1) * 32767).astype("<i2").tobytes())
                 samples += len(item)
         finally:
             await asyncio.to_thread(gen.close)  # keeps the turn in history even if we stopped early
+    SESSION["transcript"].append(("assistant", "".join(said)))
+    TURN_LOG.append({"kind": key, "with_audio": reply.get("audio") is not None, "note": reply.get("note"),
+                     "said": "".join(said)})
+    return samples
+
+
+def screen_context():
+    """What the page shows right now, as a system message for the voice agent (with the real recipe content)."""
+    import notes
+
+    screen, views = SESSION["screen"], SESSION["views"]
+    if screen == "dishes" and "dishes" in views:
+        cards = "; ".join(f"{i + 1}. {notes.label(m)}: {m['description'][:160]}" for i, m in enumerate(views["dishes"]["meals"]))
+        return f"The screen shows breakfast cards the user can pick from: {cards}"
+    if screen == "video" and "video" in views:
+        main = views["video"]["main"]
+        return f"The screen is playing a cooking video: {main['title']}. {main.get('description', '')[:300]}"
+    if screen == "steps" and "steps" in views:
+        steps = views["steps"]["steps"]
+        i = min(SESSION["step"], len(steps) - 1)
+        allsteps = " ".join(f"{k + 1}. {s['title']}: {s['detail']}" for k, s in enumerate(steps))
+        return (f"The screen shows recipe step cards for {views['steps']['dish']}, currently step {i + 1} of {len(steps)}: "
+                f"{steps[i]['title']}. All steps: {allsteps} Answer cooking questions from these steps.")
+    return None  # welcome page: say nothing ("nothing looked up yet" made LFM talk about a glitch)
+
+
+async def show(ws, view):
+    """Send a stage view and remember it, so routing and a page refresh know what's on screen."""
+    kind = view["view"]
+    SESSION["views"][kind], SESSION["screen"] = view, kind
+    if kind == "dishes":
+        SESSION["meals"] = view["meals"]
+    elif kind == "video":
+        SESSION["video"] = view
+    elif kind == "steps":
+        SESSION["steps"], SESSION["step"] = view["steps"], 0
+    await send(ws, {"type": "view", **view})
+
+
+async def lookup(route, target, text):
+    import recommender
+    import search_agent
+
+    if route == "recommend":
+        return await recommender.recommend(text)
+    if route == "video":
+        meals = SESSION["meals"]
+        if target is not None and 0 <= target < len(meals):
+            SESSION["dish"] = meals[target]
+        dish = recommender.label(SESSION["dish"]) if SESSION["dish"] else text
+        return await search_agent.video(dish)
+    video = SESSION["video"]
+    return await search_agent.steps(video["main"]["id"], video["dish"])
+
+
+async def nav(ws, route, target):
+    """Step and video controls: screen changes only, no speech."""
+    steps, video = SESSION["steps"], SESSION["views"].get("video")
+    if route in ("next", "back", "repeat", "goto"):
+        i = {"next": SESSION["step"] + 1, "back": SESSION["step"] - 1, "repeat": SESSION["step"]}.get(route, target)
+        SESSION["step"] = max(0, min(len(steps) - 1, i or 0))
+        if SESSION["screen"] != "steps":
+            await send(ws, {"type": "view", **SESSION["views"]["steps"]})
+            SESSION["screen"] = "steps"
+        await send(ws, {"type": "control", "name": "goto_step", "index": SESSION["step"]})
+    elif route in ("seek", "show_video") and video:
+        await send(ws, {"type": "view", **video})
+        SESSION["screen"] = "video"
+        if route == "seek" and steps:
+            t = steps[SESSION["step"]].get("video_start") or 0
+            await send(ws, {"type": "control", "name": "video", "cmd": "seek", "t": t})
+    elif route in ("play", "pause"):
+        await send(ws, {"type": "control", "name": "video", "cmd": route})
+
+
+async def turn(ws, heard, cancel):
+    """One reply to one utterance (float32 pcm) or page request (dict: typed text / dish click),
+    stopping early once `cancel` is set (barge-in).
+
+    Returns the seconds of audio sent (0: the browser won't report playback)."""
+    import notes
+    import router
+
+    t0 = time.perf_counter()  # end of speech, as decided by the VAD
+    TURN_LOG.clear()
+    ms = lambda: round((time.perf_counter() - t0) * 1000)
+    metrics, samples = {}, 0
+    route, target, scores, audio, text = "chat", None, {}, None, ""
+    await send(ws, {"type": "state", "value": "thinking"})
+    if isinstance(heard, dict) and heard.get("name") == "select_dish":
+        route, target = "video", int(heard["id"])
+    else:
+        if isinstance(heard, dict):
+            text = heard.get("text", "")
+        else:
+            audio = heard
+            if ASR:
+                text = await asyncio.to_thread(ASR, heard)
+                metrics["asr"] = ms()
+        if text:
+            SESSION["transcript"].append(("user", text))
+            if ROUTE:
+                route, target, scores = await ROUTE(text, SESSION)
+                metrics["jev"] = ms()
+    # the voice agent hears your voice; typed text goes in as the note
+    said = {"audio": audio} if audio is not None else {"note": text}
+
+    if route in router.LOOKUPS:
+        meals = SESSION["meals"]
+        meal = meals[target] if route == "video" and target is not None and 0 <= target < len(meals) else SESSION["dish"]
+        dish = notes.label(meal) if route == "video" and meal else None
+        async def fetch():  # the view goes out as soon as the lookup returns, even mid-reassure
+            view = await asyncio.wait_for(lookup(route, target, text), LOOKUP_TIMEOUT_S)
+            metrics["module"] = ms()
+            await show(ws, view)
+            return view
+
+        job = asyncio.create_task(fetch())
+        # cached lookups return in ms: then skip "searching..." and answer once with the results on screen
+        # (a reassure after the cards were already up made LFM invent other dishes for 11 s)
+        fast, _ = await asyncio.wait({job}, timeout=FAST_LOOKUP_S)
+        if not fast:
+            # status only, without the request: hearing it, LFM answered from its own knowledge
+            # (invented dishes) instead of waiting for the search
+            samples += await speak(ws, cancel, metrics, "voice_first_audio", ms, hide_request=True,
+                                   note=notes.reassure(route, dish))
+        try:
+            view = await job
+        except Exception as e:  # design §14: apologise, keep the current screen
+            view = None
+            await send(ws, {"type": "error", "text": f"lookup failed: {e}"})
+        if not cancel.is_set():
+            heard = {"audio": audio} if audio is not None else {}  # it hears the request now, with the results on screen
+            samples += await speak(ws, cancel, metrics, "voice_first_audio" if fast else "announce_first_audio", ms,
+                                   **heard, note=notes.announce(view) if view else notes.FAILED)
+    elif route in NAV:
+        await nav(ws, route, target)
+    else:
+        samples += await speak(ws, cancel, metrics, "voice_first_audio", ms, **said)
     metrics["total"] = ms()  # generation done; the browser may still be playing
-    await send(ws, {"type": "metrics", "route": "chat", "ms": metrics})
+    said_text = SESSION["transcript"][-1][1] if SESSION["transcript"] and SESSION["transcript"][-1][0] == "assistant" else ""
+    HEALTH["last_turn"] = {"at": time.strftime("%H:%M:%S"), "route": route, "ms": metrics, "audio_s": round(samples / 24_000, 1),
+                           "heard_s": round(len(audio) / MIC_SR, 1) if audio is not None else None,
+                           "heard": text, "said": said_text}
+    top = dict(sorted(scores.items(), key=lambda kv: -kv[1])[:3])
+    entry = {**HEALTH["last_turn"], "target": target, "top_scores": top, "text_history": TEXT_HISTORY,
+             "model_calls": list(TURN_LOG)}
+    if SAVE_AUDIO:  # off in tests, so fake turns stay out of the log
+        os.makedirs("cache", exist_ok=True)
+        with open("cache/turns.jsonl", "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    if audio is not None and SAVE_AUDIO:  # debug: exactly what the server got from the browser mic
+        import soundfile as sf
+
+        os.makedirs("voice_debug", exist_ok=True)
+        n = HEALTH["turns"] + HEALTH["errors"] + 1
+        for path in ("voice_debug/live_last.wav", f"voice_debug/live_turn{n}.wav"):
+            sf.write(path, audio, MIC_SR)
+    await send(ws, {"type": "metrics", "route": route, "target": target, "scores": scores, "ms": metrics})
     return samples / 24_000
 
 
@@ -100,7 +317,7 @@ class Listener:
     """Per-connection VAD: mic frames in, turns out. Speech during a reply interrupts it."""
 
     def __init__(self, ws):
-        self.ws, self.ep, self.residual = ws, Endpointer(), np.zeros(0, np.float32)
+        self.ws, self.ep, self.residual = ws, Endpointer(max_s=MAX_UTTERANCE_S), np.zeros(0, np.float32)
         self.busy, self.task, self.played, self.cancel = False, None, asyncio.Event(), asyncio.Event()
 
     async def listen(self):
@@ -128,18 +345,28 @@ class Listener:
                     await send(self.ws, {"type": "control", "name": "interrupt"})
                 await send(self.ws, {"type": "state", "value": "hearing"})
             if speech is not None:
-                self.busy = True
-                prev, self.cancel, self.played = self.task, asyncio.Event(), asyncio.Event()
-                self.task = asyncio.create_task(self._turn(speech, prev, self.cancel, self.played))
+                self.start(speech)
+
+    def start(self, heard):
+        """Queue a turn for an utterance (pcm) or a page request (dict)."""
+        self.busy = True
+        prev, self.cancel, self.played = self.task, asyncio.Event(), asyncio.Event()
+        self.task = asyncio.create_task(self._turn(heard, prev, self.cancel, self.played))
 
     async def _turn(self, speech, prev, cancel, played):
         if prev:  # an interrupted turn may still be winding down
             await prev
+        HEALTH["turn_started"] = time.time()
         try:
             secs = await turn(self.ws, speech, cancel)
+            HEALTH["turns"] += 1
         except Exception as e:  # design §14: report, then carry on with the next turn
+            HEALTH["errors"] += 1
+            HEALTH["last_error"] = f"{time.strftime('%H:%M:%S')} {type(e).__name__}: {e}"
             await send(self.ws, {"type": "error", "text": f"voice agent failed: {e}"})
             secs = 0
+        finally:
+            HEALTH["turn_started"] = None
         if secs and not cancel.is_set():  # wait for playback; the timeout covers a closed/hidden tab
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(played.wait(), secs + 5)
@@ -160,6 +387,8 @@ async def ws_endpoint(ws: WebSocket):
         with contextlib.suppress(Exception):
             await old.close(code=4000)  # second tab takes over (design §14)
     listener = Listener(ws)
+    if view := SESSION["views"].get(SESSION["screen"]):  # page refresh: restore the stage
+        await send(ws, {"type": "view", **view})
     await listener.listen()
     try:
         while True:
@@ -170,9 +399,16 @@ async def ws_endpoint(ws: WebSocket):
                 if data and len(data) % 2 == 0 and len(data) <= MAX_FRAME_S * MIC_SR * 2:
                     await listener.frame(np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768)
             elif msg.get("text"):
-                with contextlib.suppress(ValueError):
-                    if json.loads(msg["text"]) == {"type": "playback", "value": "done"}:
+                with contextlib.suppress(ValueError, AttributeError):
+                    m = json.loads(msg["text"])
+                    if m == {"type": "playback", "value": "done"}:
                         listener.playback_done()
+                    elif m.get("type") == "text" or m.get("name") == "select_dish":
+                        listener.start(m)  # welcome chip / dish card click: a full turn
+                    elif m.get("name") == "goto_step":  # the page already switched; keep SESSION in sync
+                        SESSION["step"], SESSION["screen"] = int(m["index"]), "steps"
+                    elif m.get("name") in ("show_video", "show_steps"):
+                        SESSION["screen"] = m["name"].removeprefix("show_")
     except WebSocketDisconnect:
         pass
     finally:

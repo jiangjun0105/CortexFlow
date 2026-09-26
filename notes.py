@@ -1,15 +1,12 @@
 """Voice-agent prompt text (spec §6): the system prompt and the notes added to a user turn."""
 import re
 
-SYSTEM = ("You are a warm, brief kitchen helper speaking out loud. A separate system finds dishes, "
-          "recipes and videos and shows them on the screen. Never name dishes, give recipe steps, "
-          "or state facts you'd need to look up — the screen does that. "
-          "Keep every reply to one or two short sentences.")
-
-# ponytail: tuned by try_notes.py against LFM2.5-Audio; near-identical rewordings (e.g. "That is being looked up")
-# make it answer the question instead. Re-run try_notes.py after any change.
-REASSURE = ("[The answer is being looked up and will appear on screen. Don't answer yourself. "
-            "Just say something like 'On it, one sec!']")
+SYSTEM = ("Respond with interleaved text and audio. "  # keep first: LFM's conversation mode (without it, it transcribes)
+          "You are a friendly breakfast helper, talking out loud with the user. You can search the web: when the "
+          "user asks for breakfast ideas, recipes or cooking videos, a search runs automatically and the results "
+          "appear on the screen next to you. Status messages tell you what is being searched and what the screen "
+          "shows; talk about them naturally. Keep replies short and conversational.")
+# ponytail: picked by A/B on real clips; naming "a separate search agent" made LFM copy its previous reply verbatim
 
 FAILED = "[The lookup failed. Apologise briefly and suggest trying again.]"
 
@@ -18,15 +15,25 @@ def label(meal):
     return meal.get("name") or re.split(r"(?<=[.!?])\s", meal["description"].strip(), 1)[0]
 
 
+# Notes tell the model what is happening, not what to say; it replies in its own words.
+def reassure(route, dish=None):
+    """Status when Jev triggers a lookup, while the web agent works."""
+    what = {"recommend": "trending breakfasts",
+            "video": f"a cooking video for {dish}" if dish else "a cooking video online",
+            "steps": "step-by-step cards for this recipe"}[route]
+    return f"[Status: now searching online for {what}. The results will appear on the screen in a few seconds.]"
+
+
 def announce(view):
+    """Status when the web agent's result is on screen."""
     kind = view["view"]
     if kind == "dishes":
-        summary = f"{len(view['meals'])} breakfasts: " + "; ".join(label(m) for m in view["meals"])
+        names = [label(m) for m in view["meals"]]
+        found = f"{len(names)} trending breakfasts: " + ", ".join(names)
     elif kind == "video":
-        main = view["main"]
-        summary = (f"a {main['minutes']}-minute video: " if main.get("minutes") else "a video: ") + main["title"]
+        found = f"a cooking video, {view['main']['title'].rstrip('.')}, ready to play"
     elif kind == "steps":
-        summary = f"{len(view['steps'])} steps; step 1 is {view['steps'][0]['title']}"
+        found = f"{len(view['steps'])} step-by-step cards, starting with {view['steps'][0]['title']}"
     else:
         raise ValueError(kind)
-    return f"[The screen now shows: {summary.rstrip(".")}. Tell them in one sentence and invite them to pick or continue.]"
+    return f"[Status: the search finished. The screen now shows {found}.]"

@@ -16,11 +16,14 @@ NO = "Anything else: a different request, chit-chat, thanks, or an acknowledgmen
 # The tunable "system prompt": {id: (instructions, true criterion)}.
 QUESTIONS = {
     "recommend": ("Does the user want breakfast or meal ideas, suggestions, or what's popular?",
-                  "The latest message asks for dish ideas, recommendations, or what's popular/trending to cook."),
+                  "The latest message asks for dish ideas, recommendations, or what's popular/trending to cook, "
+                  "or says they are going to cook breakfast without naming a dish yet ('I'm cooking for my wife today')."),
     "video": ("Does the user want to see how to cook a specific dish (choosing one on screen or naming one)?",
-              "The latest message picks a dish (e.g. 'let's do X', 'the second one', 'that one looks good') or asks how to make a named dish."),
+              "The latest message picks a dish (e.g. 'let's do X', 'the second one', 'that one looks good') or asks how to make a named dish, "
+              "and that dish's video is not already on screen (on the video screen, 'how do I make it' means steps, not video)."),
     "steps": ("Does the user find the video or recipe hard to follow and want it broken into steps?",
-              "The latest message says the video/recipe is confusing, too fast, or hard to follow, or asks for step-by-step instructions, "
+              "The latest message says the video/recipe is confusing, too fast, or hard to follow, asks for step-by-step instructions, "
+              "or, while the video is on screen, asks how to make or cook it, "
               "and the step cards are not already on screen (screen is not 'steps')."),
     "next": ("Does the user want to move to the next step?",
              "The latest message asks to go forward to the next step ('next', 'okay next', 'done, what now')."),
@@ -118,7 +121,7 @@ _client = None
 async def route(text, session):
     global _client
     try:
-        _client = _client or httpx.AsyncClient(timeout=1.0)
+        _client = _client or httpx.AsyncClient(timeout=1.5)
         r = await asyncio.wait_for(_client.post(
             URL, headers={"Authorization": f"Bearer {KEY}"},
             json={"state": _state(text, session), "model": "jev-latest", "questions": _questions(session)}), 1.0)

@@ -113,11 +113,10 @@
     if (!document.getElementById("vw-yt")) return;
     player = new YT.Player("vw-yt", {
       videoId: id,
-      playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
+      playerVars: { autoplay: 0, playsinline: 1, rel: 0, modestbranding: 1 }, // never auto-start: it drowns out the agent
       events: {
         onReady: (e) => {
           playerReady = true;
-          if (current === "video") e.target.playVideo(); else e.target.pauseVideo();
           queue.splice(0).forEach((f) => f(e.target));
         },
         onError: onPlayerError,
@@ -138,11 +137,14 @@
     frame.replaceChildren(fb);
   }
 
+  // seekTo starts a cued/unstarted video (YouTube API), so re-pause unless it was already playing
+  function seekQuiet(p, t) { const playing = p.getPlayerState() === 1; p.seekTo(t, true); if (!playing) p.pauseVideo(); }
+
   function playVideoId(id) {
     const i = playlist.findIndex((x) => x.id === id);
     if (i >= 0) playIndex = i;
     savedPos = 0;
-    if (player) playerDo((p) => p.loadVideoById(id));
+    if (player) playerDo((p) => p.cueVideoById(id)); // cue, don't play
     else { panes.video.querySelector(".vw-player").replaceChildren(Object.assign(el("div"), { id: "vw-yt" })); createPlayer(id); }
   }
 
@@ -202,7 +204,7 @@
 
   function resumeVideo() {
     const pos = savedPos;
-    playerDo((p) => { if (pos) p.seekTo(pos, true); p.playVideo(); });
+    playerDo((p) => { if (pos) seekQuiet(p, pos); });
   }
 
   // ---------- public ----------
@@ -252,9 +254,10 @@
       if (msg.name !== "video") return;
       if (msg.cmd === "play") playerDo((p) => p.playVideo());
       else if (msg.cmd === "pause") this.pauseVideo();
-      else if (msg.cmd === "seek") { savedPos = msg.t || 0; playerDo((p) => { p.seekTo(msg.t || 0, true); if (current === "video") p.playVideo(); }); }
+      else if (msg.cmd === "seek") { savedPos = msg.t || 0; playerDo((p) => seekQuiet(p, msg.t || 0)); }
     },
 
     pauseVideo() { playerDo((p) => p.pauseVideo()); },
+    duck(on) { playerDo((p) => p.setVolume(on ? 15 : 100)); }, // quieter while the agent talks
   };
 })();

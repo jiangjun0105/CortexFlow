@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Breakfast voice agent (mock)</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="views.css">
+  <style>
+    #mock-hint { position: fixed; right: 8px; bottom: 8px; z-index: 99; padding: 4px 8px; border-radius: 6px;
+                 background: #000a; color: #fff; font: 12px/1.4 monospace; pointer-events: none; }
+  </style>
+  <script src="https://www.youtube.com/iframe_api"></script>
+</head>
+<body>
+  <div id="caption"></div>
+  <div><button id="talk">Start</button></div>
+  <div id="status">mock</div>
+  <div id="metrics"></div>
+  <div id="mock-hint">N next · A autoplay · R restart</div>
+  <script src="views.js"></script>
+  <script src="ui.js"></script>
+  <script src="mock.js"></script>
+</body>
+</html>

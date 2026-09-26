@@ -5,3 +5,6 @@ uvicorn[standard]
 mlx-whisper
 httpx
 pytest
+nimble_python
+beautifulsoup4
+python-dotenv

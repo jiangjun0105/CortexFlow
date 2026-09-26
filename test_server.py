@@ -11,6 +11,9 @@ class FakeAgent:
     def __init__(self):
         self.heard, self.speak = [], True
 
+    def add_system(self, text):
+        pass
+
     def reply(self, audio=None, note=None):
         self.heard.append(audio)
         yield "hi"
@@ -43,6 +46,8 @@ kinds = lambda msgs: [m["type"] + ":" + str(m.get("value", "")) if isinstance(m,
 LISTENING = {"type": "state", "value": "listening"}
 DONE = json.dumps({"type": "playback", "value": "done"})
 
+server.SAVE_AUDIO = False  # don't overwrite real captures in voice_debug/
+server.HALF_DUPLEX = True  # the mic-ignored-while-speaking path below assumes half duplex
 server.AGENT = fake = FakeAgent()
 server.VAD = lambda block: float(np.abs(block).max() > 0.05)  # loud = speech
 with TestClient(server.app) as client:
@@ -80,4 +85,29 @@ with TestClient(server.app) as client:
         with client.websocket_connect("/ws") as ws2:  # second tab takes over, old one closed with 4000
             assert ws.receive() == {"type": "websocket.close", "code": 4000, "reason": ""}
             assert ws2.receive_json() == LISTENING
+
+# lookup turn: ASR -> router -> REASSURE while the (fake) recommender runs -> dishes view -> ANNOUNCE
+import recommender, notes
+server.ASR = lambda pcm: "what's popular for breakfast?"
+async def fake_route(text, session): return "recommend", None, {"recommend": 0.99}
+server.ROUTE = fake_route
+async def fake_recommend(q): return {"view": "dishes", "meals": [{"id": 0, "name": "French toast", "image": "", "description": "x"}]}
+recommender.recommend = fake_recommend
+fake.notes = []
+_reply = fake.reply
+fake.reply = lambda audio=None, note=None: (fake.notes.append(note), _reply(audio, note))[1]
+with TestClient(server.app) as client, client.websocket_connect("/ws") as ws:
+    until(ws, LISTENING)
+    stream(ws, tone(0.8), silence(0.8))
+    msgs = []
+    while not (msgs and isinstance(msgs[-1], dict) and msgs[-1]["type"] == "metrics"):
+        m = ws.receive()
+        msgs.append(m["bytes"] if m.get("bytes") is not None else json.loads(m["text"]))
+    views = [m for m in msgs if isinstance(m, dict) and m["type"] == "view"]
+    assert [v["view"] for v in views] == ["dishes"], kinds(msgs)
+    assert fake.notes[-1:] == [notes.announce(views[0])], fake.notes  # instant lookup: no reassure, one reply with the results
+    assert msgs[-1]["route"] == "recommend" and {"asr", "jev", "module"} <= msgs[-1]["ms"].keys()
+    assert server.SESSION["screen"] == "dishes" and server.SESSION["meals"][0]["name"] == "French toast"
+    ws.send_text(DONE)
+    until(ws, LISTENING)
 print("ok")
