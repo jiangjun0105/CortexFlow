@@ -18,6 +18,7 @@
     left.append(orb);
     for (const id of ["caption", "talk", "status"]) { const e = document.getElementById(id); if (e) left.append(e); }
     left.append(strip);
+    document.body.classList.add("no-metrics"); // hidden by default; M shows the timings for debugging
     const m = document.getElementById("metrics"); if (m) left.append(m);
     main.append(left, stage);
     document.body.prepend(main);

@@ -18,19 +18,25 @@ def label(meal):
     return meal.get("name") or re.split(r"(?<=[.!?])\s", meal["description"].strip(), 1)[0]
 
 
+# Notes tell the model what is happening, not what to say; it replies in its own words.
+def reassure(route, dish=None):
+    """Status when Jev triggers a lookup, while the web agent works."""
+    what = {"recommend": "trending breakfasts online",
+            "video": f"a cooking video for {dish}" if dish else "a cooking video online",
+            "steps": "step-by-step cards for this recipe"}[route]
+    return f"[Status: you are now searching for {what}. The results will appear on the screen in a few seconds.]"
+
+
 def announce(view):
-    """What the screen now shows, and what one sentence to say about it: the ask differs per screen."""
+    """Status when the web agent's result is on screen."""
     kind = view["view"]
     if kind == "dishes":
-        summary = f"{len(view['meals'])} breakfasts: " + "; ".join(label(m) for m in view["meals"])
-        ask = "ask which one they'd like to make"
+        names = [label(m) for m in view["meals"]]
+        found = f"{len(names)} trending breakfasts: " + ", ".join(names)
     elif kind == "video":
-        main = view["main"]
-        summary = (f"a {main['minutes']}-minute video: " if main.get("minutes") else "a video: ") + main["title"]
-        ask = "say the video is playing, and they can ask for step-by-step cards if it's hard to follow"
+        found = f"a cooking video, {view['main']['title'].rstrip('.')}, now playing"
     elif kind == "steps":
-        summary = f"{len(view['steps'])} steps; step 1 is {view['steps'][0]['title']}"
-        ask = "say step 1 out loud, and that they can say 'next' when ready"
+        found = f"{len(view['steps'])} step-by-step cards, starting with {view['steps'][0]['title']}"
     else:
         raise ValueError(kind)
-    return f"[The screen now shows {summary.rstrip('.')}. In one sentence, {ask}.]"
+    return f"[Status: the search finished. The screen now shows {found}.]"

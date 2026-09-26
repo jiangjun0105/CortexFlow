@@ -256,9 +256,12 @@ async def turn(ws, heard, cancel):
     said = {"audio": audio} if audio is not None else {"note": text}
 
     if route in router.LOOKUPS:
+        meals = SESSION["meals"]
+        meal = meals[target] if route == "video" and target is not None and 0 <= target < len(meals) else SESSION["dish"]
+        dish = notes.label(meal) if route == "video" and meal else None
         job = asyncio.create_task(asyncio.wait_for(lookup(route, target, text), LOOKUP_TIMEOUT_S))
         samples += await speak(ws, cancel, metrics, "voice_first_audio", ms,
-                               **(said if audio is not None else {}), note=notes.REASSURE)
+                               **(said if audio is not None else {}), note=notes.reassure(route, dish))
         try:
             view = await job
         except Exception as e:  # design §14: apologise, keep the current screen
