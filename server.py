@@ -32,8 +32,10 @@ MAX_FRAME_S = 1  # one mic frame; the browser sends ~0.1 s
 HALF_DUPLEX = True  # the browser echo cancellation let the agent hear itself and barge in on its own replies
 AGENT = None  # VoiceAgent, loaded at startup; tests set a fake before starting the app
 VAD = None  # block (float32, 512 samples) -> speech prob; silero at startup, tests set a fake
-SMART = os.environ.get("SMART") == "1"  # SMART=1: load ASR + Jev router + lookups; off: voice agent only
-ASR = None  # pcm -> text (mlx-whisper), loaded when SMART; None: every turn is plain chat
+# per-component switches (1 = on, 0 = off). Default: ASR + Jev on, kitchen prompt off (it made LFM echo the user).
+_on = lambda k, default: os.environ.get(k, default) == "1"
+USE_ASR, USE_JEV, KITCHEN_PROMPT = _on("ASR", "1"), _on("JEV", "1"), _on("KITCHEN", "0")
+ASR = None  # pcm -> text (mlx-whisper), loaded when USE_ASR; None: every turn is plain chat
 ROUTE = None  # async (text, session) -> (route, target, scores): the Jev router
 LOOKUP_TIMEOUT_S = 45  # a cold recommend is ~29 s (3 Nimble search+scrape); cached after that
 MODEL_LOCK = asyncio.Lock()
@@ -64,16 +66,21 @@ async def lifespan(app):
     if AGENT is None:
         from voice_agent import VoiceAgent
 
-        if SMART:
+        if USE_ASR:
             import asr
-            import notes
-            import router
 
             await asyncio.to_thread(asr.warmup)
-            ASR, ROUTE = asr.transcribe, router.route
+            ASR = asr.transcribe
+        if USE_JEV:  # needs ASR text; without ASR it never runs
+            import router
+
+            ROUTE = router.route
             await ROUTE("hello", SESSION)  # warm Jev's connection: the first call takes ~900 ms
+        if KITCHEN_PROMPT:
+            import notes
+
             AGENT = await asyncio.to_thread(VoiceAgent, notes.SYSTEM)
-        else:  # plain voice agent, exactly as before the wiring
+        else:  # LFM's default prompt, as before the wiring
             AGENT = await asyncio.to_thread(VoiceAgent)
     yield
 
@@ -91,7 +98,7 @@ def health():
     running = time.time() - HEALTH["turn_started"] if HEALTH["turn_started"] else 0
     ok = AGENT is not None and running < STUCK_S
     return {"ok": ok, "status": "stuck" if running >= STUCK_S else "busy" if running else "idle" if AGENT else "loading",
-            "smart": SMART, "connected": SESSION["ws"] is not None, "turn_running_s": round(running, 1),
+            "asr": USE_ASR, "jev": USE_JEV, "kitchen_prompt": KITCHEN_PROMPT, "connected": SESSION["ws"] is not None, "turn_running_s": round(running, 1),
             "uptime_s": round(time.time() - HEALTH["started"]), "turns": HEALTH["turns"], "errors": HEALTH["errors"],
             "last_error": HEALTH["last_error"], "last_turn": HEALTH["last_turn"],
             "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 2**20}  # macOS: bytes
@@ -225,7 +232,17 @@ async def turn(ws, heard, cancel):
     else:
         samples += await speak(ws, cancel, metrics, "voice_first_audio", ms, **said)
     metrics["total"] = ms()  # generation done; the browser may still be playing
-    HEALTH["last_turn"] = {"at": time.strftime("%H:%M:%S"), "route": route, "ms": metrics, "audio_s": round(samples / 24_000, 1)}
+    said_text = SESSION["transcript"][-1][1] if SESSION["transcript"] and SESSION["transcript"][-1][0] == "assistant" else ""
+    HEALTH["last_turn"] = {"at": time.strftime("%H:%M:%S"), "route": route, "ms": metrics, "audio_s": round(samples / 24_000, 1),
+                           "heard_s": round(len(audio) / MIC_SR, 1) if audio is not None else None,
+                           "heard": text, "said": said_text}
+    if audio is not None:  # debug: exactly what the server got from the browser mic
+        import soundfile as sf
+
+        os.makedirs("voice_debug", exist_ok=True)
+        n = HEALTH["turns"] + HEALTH["errors"] + 1
+        for path in ("voice_debug/live_last.wav", f"voice_debug/live_turn{n}.wav"):
+            sf.write(path, audio, MIC_SR)
     await send(ws, {"type": "metrics", "route": route, "target": target, "scores": scores, "ms": metrics})
     return samples / 24_000
 
