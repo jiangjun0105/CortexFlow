@@ -130,7 +130,7 @@ async def speak(ws, cancel, metrics, key, ms, **reply):
                 hist = hist[:-1]  # that's the current utterance, which goes in as audio
             await asyncio.to_thread(AGENT.set_history, hist[-12:])
         ctx = screen_context()
-        if TEXT_HISTORY or ctx != SESSION.get("screen_told"):  # tell the model what's on screen, before the user's input
+        if ctx and (TEXT_HISTORY or ctx != SESSION.get("screen_told")):  # tell the model what's on screen, before the user's input
             AGENT.add_system(ctx)
             SESSION["screen_told"] = ctx
         gen = AGENT.reply(**reply)
@@ -171,7 +171,7 @@ def screen_context():
         allsteps = " ".join(f"{k + 1}. {s['title']}: {s['detail']}" for k, s in enumerate(steps))
         return (f"The screen shows recipe step cards for {views['steps']['dish']}, currently step {i + 1} of {len(steps)}: "
                 f"{steps[i]['title']}. All steps: {allsteps} Answer cooking questions from these steps.")
-    return "The screen shows the welcome page; nothing has been looked up yet."
+    return None  # welcome page: say nothing ("nothing looked up yet" made LFM talk about a glitch)
 
 
 async def show(ws, view):
@@ -282,9 +282,10 @@ async def turn(ws, heard, cancel):
     top = dict(sorted(scores.items(), key=lambda kv: -kv[1])[:3])
     entry = {**HEALTH["last_turn"], "target": target, "top_scores": top, "text_history": TEXT_HISTORY,
              "model_calls": list(TURN_LOG)}
-    os.makedirs("cache", exist_ok=True)
-    with open("cache/turns.jsonl", "a") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    if SAVE_AUDIO:  # off in tests, so fake turns stay out of the log
+        os.makedirs("cache", exist_ok=True)
+        with open("cache/turns.jsonl", "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     if audio is not None and SAVE_AUDIO:  # debug: exactly what the server got from the browser mic
         import soundfile as sf
 
