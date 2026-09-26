@@ -11,6 +11,9 @@ class FakeAgent:
     def __init__(self):
         self.heard, self.speak = [], True
 
+    def add_system(self, text):
+        pass
+
     def reply(self, audio=None, note=None):
         self.heard.append(audio)
         yield "hi"

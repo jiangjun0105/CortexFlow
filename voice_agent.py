@@ -21,6 +21,12 @@ class VoiceAgent:
         self.set_history([])
         self.marks, self.last_text = {}, ""
 
+    def add_system(self, text):
+        """Add a system turn (e.g. what the screen shows now) before the next user turn."""
+        self.chat.new_turn("system")
+        self.chat.add_text(text)
+        self.chat.end_turn()
+
     def set_history(self, turns):
         """Replace the conversation with text-only turns [(role, text)]: no past audio in the context."""
         self.chat = ChatState(self.processor)

@@ -129,6 +129,10 @@ async def speak(ws, cancel, metrics, key, ms, **reply):
             if reply.get("audio") is not None and hist and hist[-1][0] == "user":
                 hist = hist[:-1]  # that's the current utterance, which goes in as audio
             await asyncio.to_thread(AGENT.set_history, hist[-12:])
+        ctx = screen_context()
+        if TEXT_HISTORY or ctx != SESSION.get("screen_told"):  # tell the model what's on screen, before the user's input
+            AGENT.add_system(ctx)
+            SESSION["screen_told"] = ctx
         gen = AGENT.reply(**reply)
         try:
             # one next() per thread hop, so each chunk goes out as soon as it's decoded
@@ -148,6 +152,26 @@ async def speak(ws, cancel, metrics, key, ms, **reply):
     TURN_LOG.append({"kind": key, "with_audio": reply.get("audio") is not None, "note": reply.get("note"),
                      "said": "".join(said)})
     return samples
+
+
+def screen_context():
+    """What the page shows right now, as a system message for the voice agent (with the real recipe content)."""
+    import notes
+
+    screen, views = SESSION["screen"], SESSION["views"]
+    if screen == "dishes" and "dishes" in views:
+        cards = "; ".join(f"{i + 1}. {notes.label(m)}: {m['description'][:160]}" for i, m in enumerate(views["dishes"]["meals"]))
+        return f"The screen shows breakfast cards the user can pick from: {cards}"
+    if screen == "video" and "video" in views:
+        main = views["video"]["main"]
+        return f"The screen is playing a cooking video: {main['title']}. {main.get('description', '')[:300]}"
+    if screen == "steps" and "steps" in views:
+        steps = views["steps"]["steps"]
+        i = min(SESSION["step"], len(steps) - 1)
+        allsteps = " ".join(f"{k + 1}. {s['title']}: {s['detail']}" for k, s in enumerate(steps))
+        return (f"The screen shows recipe step cards for {views['steps']['dish']}, currently step {i + 1} of {len(steps)}: "
+                f"{steps[i]['title']}. All steps: {allsteps} Answer cooking questions from these steps.")
+    return "The screen shows the welcome page; nothing has been looked up yet."
 
 
 async def show(ws, view):
