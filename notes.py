@@ -31,7 +31,7 @@ def announce(view):
         names = [label(m) for m in view["meals"]]
         found = f"{len(names)} trending breakfasts: " + ", ".join(names)
     elif kind == "video":
-        found = f"a cooking video, {view['main']['title'].rstrip('.')}, now playing"
+        found = f"a cooking video, {view['main']['title'].rstrip('.')}, ready to play"
     elif kind == "steps":
         found = f"{len(view['steps'])} step-by-step cards, starting with {view['steps'][0]['title']}"
     else:

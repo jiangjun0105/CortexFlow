@@ -256,5 +256,6 @@
     },
 
     pauseVideo() { playerDo((p) => p.pauseVideo()); },
+    duck(on) { playerDo((p) => p.setVolume(on ? 15 : 100)); }, // quieter while the agent talks
   };
 })();

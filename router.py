@@ -16,7 +16,8 @@ NO = "Anything else: a different request, chit-chat, thanks, or an acknowledgmen
 # The tunable "system prompt": {id: (instructions, true criterion)}.
 QUESTIONS = {
     "recommend": ("Does the user want breakfast or meal ideas, suggestions, or what's popular?",
-                  "The latest message asks for dish ideas, recommendations, or what's popular/trending to cook."),
+                  "The latest message asks for dish ideas, recommendations, or what's popular/trending to cook, "
+                  "or says they are going to cook breakfast without naming a dish yet ('I'm cooking for my wife today')."),
     "video": ("Does the user want to see how to cook a specific dish (choosing one on screen or naming one)?",
               "The latest message picks a dish (e.g. 'let's do X', 'the second one', 'that one looks good') or asks how to make a named dish, "
               "and that dish's video is not already on screen (on the video screen, 'how do I make it' means steps, not video)."),

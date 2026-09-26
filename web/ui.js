@@ -32,7 +32,10 @@
         if (msg.type === "state") {
           const s = msg.value ?? msg.state; // server protocol uses "value"
           document.body.dataset.state = s; rate(s);
-          if (["listening", "hearing", "speaking"].includes(s)) Views.pauseVideo();
+          // "listening" is the resting state with the hands-free mic, so it must not pause the video:
+          // pause only when the user starts talking, and turn it down while the agent speaks
+          if (s === "hearing") Views.pauseVideo();
+          Views.duck(s === "speaking");
         } else if (msg.type === "view") Views.show(msg);
         else if (msg.type === "control" && msg.name !== "interrupt") Views.control(msg);
       } catch (e) { console.error("UI.handle", e); }
