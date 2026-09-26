@@ -1,0 +1,9 @@
+{
+  "generated_at": "2026-09-25T18:30:00+00:00",
+  "source": "fake: shaped like send_recs.py's RawTree breakfast_trends_full top-3 (the API key was rejected)",
+  "recommendations": [
+    {"trend": "Cottage cheese toast", "posts": 1842, "engagement": 412930, "avg_likes": 186.4},
+    {"trend": "Baked oats", "posts": 1517, "engagement": 355214, "avg_likes": 171.2},
+    {"trend": "Shakshuka", "posts": 1203, "engagement": 298877, "avg_likes": 162.9}
+  ]
+}

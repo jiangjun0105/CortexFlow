@@ -4,6 +4,7 @@ Dish names come from the RawTree social-media trends that send_recs.py POSTs to 
 (saved in cache/recommendations.json); until one arrives, a fixed list.
 """
 import asyncio
+import html
 import json
 import re
 
@@ -44,7 +45,7 @@ async def _cards(key: str) -> dict:
     find = web().find_dish_card
     raws = await asyncio.gather(*(asyncio.to_thread(find, n) for n in names), return_exceptions=True)
     meals = [
-        {"id": i, "name": name, "image": raw["image_url"], "description": raw["description"]}
+        {"id": i, "name": name, "image": raw["image_url"], "description": html.unescape(raw["description"])}
         for i, (name, raw) in enumerate(zip(names, raws))
         if isinstance(raw, dict) and raw.get("image_url") and raw.get("description")
     ]
