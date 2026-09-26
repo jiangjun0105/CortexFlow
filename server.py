@@ -123,14 +123,14 @@ async def send(ws, msg):
         await (ws.send_bytes(msg) if isinstance(msg, bytes) else ws.send_json(msg))
 
 
-async def speak(ws, cancel, metrics, key, ms, **reply):
+async def speak(ws, cancel, metrics, key, ms, hide_request=False, **reply):
     """Stream one voice-agent reply (audio=/note=, see VoiceAgent.reply). Returns samples sent."""
     samples, said = 0, []
     async with MODEL_LOCK:
         if TEXT_HISTORY:  # past turns as text; only this turn's audio goes in as audio
             hist = SESSION["transcript"]
-            if reply.get("audio") is not None and hist and hist[-1][0] == "user":
-                hist = hist[:-1]  # that's the current utterance, which goes in as audio
+            if (reply.get("audio") is not None or hide_request) and hist and hist[-1][0] == "user":
+                hist = hist[:-1]  # the current utterance: it goes in as audio, or is hidden (reassure)
             await asyncio.to_thread(AGENT.set_history, hist[-HISTORY_TURNS:])
         ctx = screen_context()
         if ctx and (TEXT_HISTORY or ctx != SESSION.get("screen_told")):  # tell the model what's on screen, before the user's input
@@ -273,15 +273,17 @@ async def turn(ws, heard, cancel):
         # (a reassure after the cards were already up made LFM invent other dishes for 11 s)
         fast, _ = await asyncio.wait({job}, timeout=FAST_LOOKUP_S)
         if not fast:
-            samples += await speak(ws, cancel, metrics, "voice_first_audio", ms,
-                                   **(said if audio is not None else {}), note=notes.reassure(route, dish))
+            # status only, without the request: hearing it, LFM answered from its own knowledge
+            # (invented dishes) instead of waiting for the search
+            samples += await speak(ws, cancel, metrics, "voice_first_audio", ms, hide_request=True,
+                                   note=notes.reassure(route, dish))
         try:
             view = await job
         except Exception as e:  # design §14: apologise, keep the current screen
             view = None
             await send(ws, {"type": "error", "text": f"lookup failed: {e}"})
         if not cancel.is_set():
-            heard = {"audio": audio} if fast and audio is not None else {}  # not yet answered: it hears the user
+            heard = {"audio": audio} if audio is not None else {}  # it hears the request now, with the results on screen
             samples += await speak(ws, cancel, metrics, "voice_first_audio" if fast else "announce_first_audio", ms,
                                    **heard, note=notes.announce(view) if view else notes.FAILED)
     elif route in NAV:
