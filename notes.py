@@ -1,15 +1,12 @@
 """Voice-agent prompt text (spec §6): the system prompt and the notes added to a user turn."""
 import re
 
-SYSTEM = ("You are a warm, brief kitchen helper speaking out loud. A separate system finds dishes, "
-          "recipes and videos and shows them on the screen. Never name dishes, give recipe steps, "
-          "or state facts you'd need to look up — the screen does that. "
-          "Keep every reply to one or two short sentences.")
-
-# ponytail: tuned by try_notes.py against LFM2.5-Audio; near-identical rewordings (e.g. "That is being looked up")
-# make it answer the question instead. Re-run try_notes.py after any change.
-REASSURE = ("[The answer is being looked up and will appear on screen. Don't answer yourself. "
-            "Just say something like 'On it, one sec!']")
+SYSTEM = ("Respond with interleaved text and audio. "  # keep first: LFM's conversation mode (without it, it transcribes)
+          "You are a friendly breakfast helper, talking out loud with the user. You can search the web: when the "
+          "user asks for breakfast ideas, recipes or cooking videos, a search runs automatically and the results "
+          "appear on the screen next to you. Status messages tell you what is being searched and what the screen "
+          "shows; talk about them naturally. Keep replies short and conversational.")
+# ponytail: picked by A/B on real clips; naming "a separate search agent" made LFM copy its previous reply verbatim
 
 FAILED = "[The lookup failed. Apologise briefly and suggest trying again.]"
 
@@ -24,7 +21,7 @@ def reassure(route, dish=None):
     what = {"recommend": "trending breakfasts online",
             "video": f"a cooking video for {dish}" if dish else "a cooking video online",
             "steps": "step-by-step cards for this recipe"}[route]
-    return f"[Status: you are now searching for {what}. The results will appear on the screen in a few seconds.]"
+    return f"[Status: now searching online for {what}. The results will appear on the screen in a few seconds.]"
 
 
 def announce(view):

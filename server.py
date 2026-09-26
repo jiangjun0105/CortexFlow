@@ -32,9 +32,9 @@ MAX_FRAME_S = 1  # one mic frame; the browser sends ~0.1 s
 HALF_DUPLEX = True  # the browser echo cancellation let the agent hear itself and barge in on its own replies
 AGENT = None  # VoiceAgent, loaded at startup; tests set a fake before starting the app
 VAD = None  # block (float32, 512 samples) -> speech prob; silero at startup, tests set a fake
-# per-component switches (1 = on, 0 = off). Default: ASR + Jev on, kitchen prompt off (it made LFM echo the user).
+# per-component switches (1 = on, 0 = off). KITCHEN = our system prompt (notes.SYSTEM) instead of LFM's default.
 _on = lambda k, default: os.environ.get(k, default) == "1"
-USE_ASR, USE_JEV, KITCHEN_PROMPT = _on("ASR", "1"), _on("JEV", "1"), _on("KITCHEN", "0")
+USE_ASR, USE_JEV, KITCHEN_PROMPT = _on("ASR", "1"), _on("JEV", "1"), _on("KITCHEN", "1")
 TEXT_HISTORY = _on("TEXT_HISTORY", "0")  # 1: rebuild LFM context from transcripts, only the current turn as audio
 SAVE_AUDIO = _on("SAVE_AUDIO", "1")  # save each utterance to voice_debug/live_turnN.wav (tests turn it off)
 TURN_LOG = []  # the model calls of the turn in progress, written to cache/turns.jsonl when it ends
